@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "polypicker"
+version = "0.1.0"
+description = "PolyPicker backend: NBA data ingestion, prediction models and read-only API"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "sqlalchemy>=2.0",
+    "psycopg[binary]>=3.2",
+    "pydantic-settings>=2.4",
+    "polars>=1.0",
+    "numpy>=2.0",
+    "scipy>=1.13",
+    "scikit-learn>=1.5",
+    "typer>=0.12",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "httpx>=0.27"]
+
+[project.scripts]
+polypicker = "polypicker.cli:app"
+
+[tool.setuptools.packages.find]
+include = ["polypicker*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["db: tests that need a running PostgreSQL (skipped if unavailable)"]

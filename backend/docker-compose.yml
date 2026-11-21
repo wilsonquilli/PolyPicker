@@ -1,0 +1,23 @@
+services:
+  db:
+    image: postgres:17
+    container_name: polypicker-db
+    environment:
+      POSTGRES_DB: polypicker
+      POSTGRES_USER: polypicker
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-polypicker_dev}
+      # Password for the read-only role used by the public API (FR-11.2, NFR-02.4)
+      API_DB_PASSWORD: ${API_DB_PASSWORD:-polypicker_api_dev}
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U polypicker -d polypicker"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  pgdata:
