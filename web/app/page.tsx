@@ -138,17 +138,17 @@ function FeaturedCard({ game }: { game: GameSummary }) {
         <div className="flex flex-wrap items-center justify-between gap-6">
           <div className="flex items-center gap-4">
             <div className="flex gap-1.5">
-              <TeamBadge abbr={game.away.abbreviation} size={52} />
-              <TeamBadge abbr={game.home.abbreviation} size={52} />
+              <TeamBadge abbr={game.away.abbreviation} size={44} />
+              <TeamBadge abbr={game.home.abbreviation} size={44} />
             </div>
             <div>
-              <h2 className="text-2xl font-bold tracking-tight">{game.away.name} vs {game.home.name}</h2>
+              <h2 className="text-xl font-bold tracking-tight sm:text-2xl">{game.away.name} vs {game.home.name}</h2>
               <p className="text-sm text-muted">{game.away.record} · {game.home.record} · Who wins?</p>
             </div>
           </div>
           <Gauge p={pFav} label={`${fav.abbreviation} chance`} size={110} />
         </div>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 sm:gap-3">
           {[game.away, game.home].map((s) => {
             const pv = s.team_id === game.home.team_id ? p.p_home_win : p.p_away_win;
             const proj = s.team_id === game.home.team_id ? p.projected_home_points : p.projected_away_points;
@@ -156,11 +156,11 @@ function FeaturedCard({ game }: { game: GameSummary }) {
               <div key={s.team_id} className="flex items-center justify-between rounded-xl bg-surface-2 px-4 py-3">
                 <div className="flex items-center gap-2">
                   <TeamBadge abbr={s.abbreviation} size={24} />
-                  <span className="font-medium">{s.name}</span>
+                  <span className="truncate font-medium">{s.name}</span>
                 </div>
                 <div className="text-right">
                   <div className="tabular text-lg font-bold">{Math.round(pv * 100)}%</div>
-                  {proj !== null && <div className="tabular text-[11px] text-muted">proj. {proj.toFixed(0)} pts</div>}
+                  {proj !== null && <div className="tabular whitespace-nowrap text-[11px] text-muted">proj. {proj.toFixed(0)} pts</div>}
                 </div>
               </div>
             );
@@ -169,7 +169,7 @@ function FeaturedCard({ game }: { game: GameSummary }) {
         <div className="mt-auto flex flex-col gap-2">
           <ProbBar home={p.p_home_win} homeAbbr={game.home.abbreviation} awayAbbr={game.away.abbreviation} height={8} />
           <div className="flex items-center justify-between text-xs text-muted">
-            <span>{game.away.abbreviation} {Math.round(p.p_away_win * 100)}% · {game.home.abbreviation} {Math.round(p.p_home_win * 100)}% · {p.favorite_label}</span>
+            <span className="hidden sm:inline">{game.away.abbreviation} {Math.round(p.p_away_win * 100)}% · {game.home.abbreviation} {Math.round(p.p_home_win * 100)}% · {p.favorite_label}</span>
             <span className="font-semibold text-accent group-hover:underline">View full forecast →</span>
           </div>
         </div>

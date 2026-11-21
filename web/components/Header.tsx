@@ -2,6 +2,7 @@ import Link from "next/link";
 import { Suspense } from "react";
 
 import { CategoryNav, SearchBox, ThemeToggle } from "@/components/HeaderClient";
+import { GetAppLink } from "@/components/pwa";
 
 export function Logo() {
   return (
@@ -18,7 +19,7 @@ export function Logo() {
 
 export function Header() {
   return (
-    <header className="sticky top-0 z-40 border-b border-line bg-bg/90 backdrop-blur supports-[backdrop-filter]:bg-bg/75">
+    <header className="sticky top-0 z-40 pt-[env(safe-area-inset-top)] border-b border-line bg-bg/90 backdrop-blur supports-[backdrop-filter]:bg-bg/75">
       <div className="mx-auto flex max-w-[1400px] items-center gap-4 px-4 py-3 sm:px-6">
         <Logo />
         <div className="hidden flex-1 md:block">
@@ -27,15 +28,18 @@ export function Header() {
         <nav className="ml-auto flex items-center gap-1 text-sm">
           <Link href="/accuracy" className="hidden rounded-lg px-3 py-1.5 font-medium text-muted hover:bg-surface-2 hover:text-ink sm:block">Accuracy</Link>
           <Link href="/methodology" className="hidden rounded-lg px-3 py-1.5 font-medium text-muted hover:bg-surface-2 hover:text-ink sm:block">How it works</Link>
+          <GetAppLink />
           <ThemeToggle />
         </nav>
       </div>
       <div className="px-4 pb-2 md:hidden">
         <SearchBox />
       </div>
-      <Suspense fallback={<div className="h-11" />}>
-        <CategoryNav />
-      </Suspense>
+      <div className="hidden md:block">
+        <Suspense fallback={<div className="h-11" />}>
+          <CategoryNav />
+        </Suspense>
+      </div>
     </header>
   );
 }

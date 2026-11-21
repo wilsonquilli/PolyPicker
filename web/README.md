@@ -19,8 +19,45 @@ npm run lint
 npm run build
 ```
 
-`API_URL` is used by Server Components. `NEXT_PUBLIC_API_URL` is used by the browser (search box, line explorer)
-and must be listed in the API's `CORS_ORIGINS`.
+`API_URL` is where the Next.js server finds the backend. Browser code (search, line explorer) calls the same site
+at `/api/v1/...`, and Next.js proxies those calls to `API_URL`. That means phones and the installed app never need
+to reach the backend directly, and no CORS setup is needed.
+
+## Installable app (PWA): iPhone, iPad, Android, desktop
+
+PolyPicker installs from the browser to the home screen. It's free, with no App Store or Google Play needed.
+The phone experience lives in this same codebase.
+
+| Piece | File |
+|---|---|
+| Web app manifest (name, icons, standalone display, shortcuts, install screenshots) | `app/manifest.ts` |
+| Icons: `public/icons/*` (any + maskable), `app/apple-icon.png` (iOS), `app/icon.png` (favicon) | |
+| iOS meta (`apple-mobile-web-app-*`), theme colors, safe-area viewport | `app/layout.tsx` |
+| Service worker: offline copies of visited pages, cached build assets, never caches live data | `public/sw.js` |
+| SW registration, install prompt (Android) / Add-to-Home-Screen hint (iOS), offline banner, bottom tab bar | `components/pwa.tsx` |
+| Install instructions page · phone "More" tab · offline fallback | `app/install`, `app/more`, `app/offline` |
+
+The service worker only registers in production builds (`npm run build && npm start`), so it never interferes
+with hot reload in `npm run dev`. Bump `VERSION` in `public/sw.js` when changing caching behaviour.
+
+**How users install it**
+
+* **iPhone/iPad**: Safari (or Chrome/Edge on iOS 16.4+) → Share → **Add to Home Screen**. The site shows this hint
+  automatically on iOS.
+* **Android**: Chrome/Edge/Samsung Internet shows **Install**. The site also offers its own Install button.
+* **Desktop**: install icon in Chrome/Edge's address bar, or the button on `/install`.
+
+**Testing on a real phone.** Installing and offline mode need **HTTPS** (only `localhost` is exempt). A phone on your
+Wi-Fi visiting `http://<your-computer-ip>:3000` can browse, but won't get the full app. For a free HTTPS URL to
+your laptop, run a production build and open a quick tunnel, for example:
+
+```bash
+npm run build && npm start                         # :3000
+npx cloudflared tunnel --url http://localhost:3000 # prints https://<random>.trycloudflare.com
+```
+
+Open that URL on the phone and install. For a permanent public URL, deploy the web app (e.g. Vercel's free tier)
+and host the API and database somewhere reachable. Set `API_URL` to the API's address.
 
 ## Pages
 

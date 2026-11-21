@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import type { CustomLineResult, PlayerForecast } from "@/lib/types";
 
-const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api/v1";
+const API = process.env.NEXT_PUBLIC_API_URL ?? "/api/v1";
 
 type Tab = "spread" | "total" | "player";
 type Stat = "points" | "assists" | "rebounds";

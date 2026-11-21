@@ -79,6 +79,7 @@ html.dark {
 }
 
 body {
+  -webkit-tap-highlight-color: transparent;
   background: var(--bg);
   color: var(--text);
   font-family: var(--font-geist-sans), system-ui, sans-serif;
@@ -100,4 +101,11 @@ body {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
   border-radius: 6px;
+}
+
+/* Installed-app (home screen) polish */
+@media (display-mode: standalone) {
+  html, body {
+    overscroll-behavior-y: none;
+  }
 }

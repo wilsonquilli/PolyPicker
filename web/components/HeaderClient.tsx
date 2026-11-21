@@ -7,7 +7,7 @@ import { useEffect, useId, useRef, useState, useSyncExternalStore } from "react"
 import type { SearchResult } from "@/lib/types";
 import { teamColor } from "@/lib/teams";
 
-const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api/v1";
+const API = process.env.NEXT_PUBLIC_API_URL ?? "/api/v1";
 
 const CATEGORIES = [
   { href: "/", view: "today", label: "Today" },
