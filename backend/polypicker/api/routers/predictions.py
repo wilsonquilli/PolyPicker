@@ -72,6 +72,13 @@ def game_predictions(game_id: int, category: list[Category] | None = Query(None)
     game_markets, players, excluded, model_versions = _shape(rows, game, teams)
     for r in rows:
         model_versions[r["market"]] = r["model_version"]
+    ids = list({p["player_id"] for p in players} | {e["player_id"] for e in excluded})
+    if ids:
+        names = {r["player_id"]: r for r in q(conn, """SELECT player_id, full_name, position FROM players
+                                                        WHERE player_id = ANY(:ids)""", ids=ids)}
+        for p in players + excluded:
+            n = names.get(p["player_id"], {})
+            p["full_name"], p["position"] = n.get("full_name"), n.get("position")
     return {"data": {
         "game_id": game_id, "game_status": game["status"], "forecast_status": status,
         "kind": rev["kind"], "revision": rev["revision"], "published_at": rev["published_at"],
@@ -105,6 +112,10 @@ def _shape(rows: list[dict], game: dict, teams: dict) -> tuple[dict, list, list,
                              "probability": r["probability"], "outcome": _outcome(r)}
             if r["side"] == "home" and r["details"]:
                 ml["factors"] = r["details"].get("factors")
+                dist = r["details"].get("distribution") or {}
+                if dist:  # P(home win) = P(margin > 0) under Normal(mean, sd)
+                    ml["distribution"] = {"type": "normal", "mean": dist.get("mu_margin_home"),
+                                          "sd": dist.get("sigma_win")}
         elif mk == "team_points":
             sc = gm.setdefault("projected_score", {})
             sc[r["side"]] = round(r["projection"], 1)
@@ -114,7 +125,11 @@ def _shape(rows: list[dict], game: dict, teams: dict) -> tuple[dict, list, list,
             if r["threshold_kind"] is None:
                 m["projection"] = round(r["projection"], 1)
                 m["projection_label"] = r["label"]
-                m["probabilities_available"] = bool(r["details"] and r["details"].get("lines_supported"))
+                d = r["details"] or {}
+                m["probabilities_available"] = bool(d.get("lines_supported"))
+                m["distribution"] = {"type": "normal",
+                                     "mean": d.get("mu_margin_home") if mk == "spread" else d.get("mu_total"),
+                                     "sd": d.get("sigma_margin") if mk == "spread" else d.get("sigma_total")}
                 m["projection_outcome"] = _outcome(r)
             else:
                 m["lines"].append({"line": r["threshold"], "side": r["side"], "label": r["label"],
@@ -204,7 +219,9 @@ def prediction_history(
     category: list[Category] | None = Query(None), kind: Kind | None = None,
     state: list[Literal["pending", "final", "void", "unavailable", "unevaluable"]] | None = Query(None),
     date_from: date | None = None, date_to: date | None = None, team: int | None = None,
-    player_id: int | None = None, limit: int = Query(100, ge=1, le=500), offset: int = Query(0, ge=0),
+    player_id: int | None = None, probabilities_only: bool = False,
+    favorites_only: bool = Query(False, description="Winner market: only the favored side (one row per game)"),
+    limit: int = Query(100, ge=1, le=500), offset: int = Query(0, ge=0),
     conn: Connection = Depends(get_conn),
 ):
     """Archived pregame snapshots with their grading (FR-09.1, FR-09.5). Snapshots are never rewritten."""
@@ -224,8 +241,15 @@ def prediction_history(
         where.append("(g.home_team_id = :t OR g.away_team_id = :t)"); params["t"] = team
     if player_id:
         where.append("p.subject_type = 'player' AND p.subject_id = :pid"); params["pid"] = player_id
+    if probabilities_only:
+        where.append("p.probability IS NOT NULL")
+    if favorites_only:
+        where.append("(p.market <> 'moneyline' OR p.probability >= 0.5)")
     w = " AND ".join(where)
     base = f"""FROM predictions p JOIN games g USING (game_id)
+               JOIN teams ht ON ht.team_id = g.home_team_id JOIN teams at ON at.team_id = g.away_team_id
+               LEFT JOIN players pl ON p.subject_type = 'player' AND pl.player_id = p.subject_id
+               LEFT JOIN teams st ON p.subject_type = 'team' AND st.team_id = p.subject_id
                LEFT JOIN prediction_outcomes o ON o.prediction_id = p.id WHERE {w}"""
     total = q1(conn, f"SELECT count(*) n {base}", **params)["n"]
     rows = q(conn, f"""
@@ -233,7 +257,8 @@ def prediction_history(
                p.subject_type, p.subject_id, p.side, p.threshold_kind, p.threshold, p.label, p.probability,
                p.push_probability, p.projection, p.published_at, p.data_cutoff_utc,
                coalesce(o.graded_state, 'pending') AS graded_state, o.outcome, o.observed_value, o.brier,
-               o.abs_error, o.graded_at
+               o.abs_error, o.graded_at, at.abbreviation || ' @ ' || ht.abbreviation AS matchup,
+               g.home_score, g.away_score, coalesce(pl.full_name, st.abbreviation) AS subject_name
         {base} ORDER BY g.tipoff_utc DESC, p.game_id, p.id LIMIT :lim OFFSET :off""",
              **params, lim=limit, off=offset)
     return {"data": rows, "meta": prediction_meta(total=total, limit=limit, offset=offset)}
