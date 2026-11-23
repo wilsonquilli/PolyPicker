@@ -5,17 +5,17 @@
  *   - Pages (navigations): network first. A copy of each successfully loaded page is kept; when
  *     offline the saved copy is shown (the app displays an "offline, may be outdated" banner),
  *     or the /offline page if that page was never visited.
- *   - Build assets (/_next/static, icons): cache first (file names are content-hashed).
+ *   - Build assets (/_next/static, icons, team logos): cache first (file names are content-hashed).
  *   - API proxy (/api/v1), React Server Component payloads, prefetches: always network, never cached.
  *
  * Bump VERSION to force clients to drop old caches.
  */
-const VERSION = "pp-v1";
+const VERSION = "pp-v4"; // v4: new PolyPickerLogo brand icons; v3: first brand icons (cached cache-first under unchanged URLs)
 const SHELL = `${VERSION}-shell`;
 const PAGES = `${VERSION}-pages`;
 const ASSETS = `${VERSION}-assets`;
 const MAX_PAGES = 40;
-const PRECACHE = ["/offline", "/icons/icon-192.png", "/icons/icon-512.png", "/manifest.webmanifest"];
+const PRECACHE = ["/offline", "/brand/logo-light.png", "/brand/logo-dark.png", "/icons/icon-192.png", "/icons/icon-512.png", "/manifest.webmanifest"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(SHELL).then((c) => c.addAll(PRECACHE)).then(() => self.skipWaiting()));
@@ -77,7 +77,7 @@ self.addEventListener("fetch", (event) => {
     event.respondWith(networkFirstPage(req));
     return;
   }
-  if (url.pathname.startsWith("/_next/static/") || url.pathname.startsWith("/icons/") ||
+  if (url.pathname.startsWith("/_next/static/") || url.pathname.startsWith("/icons/") || url.pathname.startsWith("/logos/") || url.pathname.startsWith("/brand/") ||
       url.pathname === "/icon.png" || url.pathname === "/apple-icon.png") {
     event.respondWith(cacheFirstAsset(req));
   }

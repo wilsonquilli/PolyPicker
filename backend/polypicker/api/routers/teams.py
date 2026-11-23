@@ -17,7 +17,7 @@ router = APIRouter(tags=["teams"])
 
 def _standings(conn: Connection, season: int) -> list[dict]:
     return q(conn, f"""
-        SELECT t.team_id, t.abbreviation, t.full_name, t.conference, t.division,
+        SELECT t.team_id, t.abbreviation, t.city, t.name, t.full_name, t.conference, t.division,
                count(s.game_id) FILTER (WHERE s.win) AS wins, count(s.game_id) FILTER (WHERE NOT s.win) AS losses,
                round(avg(s.points)::numeric, 1) AS points_per_game,
                round(avg(s.points - s.plus_minus)::numeric, 1) AS opp_points_per_game,

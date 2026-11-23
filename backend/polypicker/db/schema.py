@@ -3,6 +3,8 @@
 from sqlalchemy import Engine, text
 
 from polypicker.db.models import Base
+import polypicker.nfl.models  # noqa: F401  (registers the NFL tables on Base.metadata)
+import polypicker.soccer.models  # noqa: F401  (soccer tables)
 
 _IMMUTABLE_FN = """
 CREATE OR REPLACE FUNCTION polypicker_reject_change() RETURNS trigger AS $$
@@ -15,14 +17,57 @@ _IMMUTABLE_TRIGGER = """
 DROP TRIGGER IF EXISTS predictions_immutable ON predictions;
 CREATE TRIGGER predictions_immutable BEFORE UPDATE OR DELETE ON predictions
   FOR EACH ROW EXECUTE FUNCTION polypicker_reject_change();
+DROP TRIGGER IF EXISTS nfl_predictions_immutable ON nfl_predictions;
+CREATE TRIGGER nfl_predictions_immutable BEFORE UPDATE OR DELETE ON nfl_predictions
+  FOR EACH ROW EXECUTE FUNCTION polypicker_reject_change();
+DROP TRIGGER IF EXISTS soccer_predictions_immutable ON soccer_predictions;
+CREATE TRIGGER soccer_predictions_immutable BEFORE UPDATE OR DELETE ON soccer_predictions
+  FOR EACH ROW EXECUTE FUNCTION polypicker_reject_change();
 """
 
 _SEED_SOURCES = """
 INSERT INTO data_sources (code, name, url, license_note, approved_for) VALUES
  ('kaggle_eoin_moore', 'Historical NBA Data and Player Box Scores (Eoin Moore, Kaggle)',
   'https://www.kaggle.com/datasets/eoinamoore/historical-nba-data-and-player-box-scores',
-  'NBA.com-derived. Research/prototyping only until licensing review (spec §6.4).', 'research')
+  'NBA.com-derived. Research/prototyping only until licensing review (spec §6.4).', 'research'),
+ ('nba_live', 'NBA.com live data feed (cdn.nba.com, via nba_api)',
+  'https://github.com/swar/nba_api',
+  'Unofficial access to NBA.com data; subject to the NBA.com Terms of Use. Research/prototyping only.', 'research'),
+ ('nflverse', 'nflverse NFL data (via nflreadpy)', 'https://nflverse.nflverse.com',
+  'Most nflverse datasets are CC BY 4.0 (attribution required); check each dataset''s license before commercial use.',
+  'research'),
+ ('espn_nfl', 'ESPN NFL scoreboard (site.api.espn.com)', 'https://site.api.espn.com/apis/site/v2/sports/football/nfl',
+  'Unofficial, undocumented public endpoints; no usage rights granted. Research/prototyping only.', 'research'),
+ ('espn_nba', 'ESPN NBA injury report (site.api.espn.com)', 'https://site.api.espn.com/apis/site/v2/sports/basketball/nba/injuries',
+  'Unofficial, undocumented public endpoints; no usage rights granted. Research/prototyping only.', 'research'),
+ ('espn_nba_odds', 'ESPN NBA betting lines (sports.core.api.espn.com odds)', 'https://sports.core.api.espn.com/v2/sports/basketball/leagues/nba',
+  'Unofficial, undocumented public endpoints; no usage rights granted. Lines are third-party sportsbook data. Research/prototyping only.', 'research'),
+ ('polymarket', 'Polymarket Gamma API (markets) and CLOB price history', 'https://docs.polymarket.com',
+  'Public read-only APIs, no key required; prices are crowd-traded probabilities. Attribute Polymarket when displayed.', 'research'),
+ ('espn_soccer', 'ESPN soccer scoreboard and match summaries (site.api.espn.com)',
+  'https://site.api.espn.com/apis/site/v2/sports/soccer',
+  'Unofficial, undocumented public endpoints; no usage rights granted. Research/prototyping only.', 'research'),
+ ('openfootball', 'openfootball football.json (public domain)', 'https://github.com/openfootball/football.json',
+  'CC0 1.0 (public domain): no restrictions.', 'commercial'),
+ ('football_data_org', 'football-data.org API v4', 'https://www.football-data.org',
+  'Free tier with API key; attribution required ("Football data provided by the Football-Data.org API").', 'research')
 ON CONFLICT (code) DO NOTHING;
+"""
+
+
+# create_all() doesn't alter existing tables: columns added after a table was first created go here.
+_SOCCER_COLUMNS = """
+ALTER TABLE soccer_games ALTER COLUMN competition TYPE varchar(32);
+ALTER TABLE soccer_teams ALTER COLUMN abbreviation TYPE varchar(16);
+ALTER TABLE soccer_games ADD COLUMN IF NOT EXISTS stage varchar(64);
+ALTER TABLE soccer_games ADD COLUMN IF NOT EXISTS leg smallint;
+ALTER TABLE soccer_games ADD COLUMN IF NOT EXISTS neutral boolean;
+ALTER TABLE soccer_games ADD COLUMN IF NOT EXISTS decided varchar(4);
+ALTER TABLE soccer_games ADD COLUMN IF NOT EXISTS home_score_90 smallint;
+ALTER TABLE soccer_games ADD COLUMN IF NOT EXISTS away_score_90 smallint;
+ALTER TABLE soccer_games ADD COLUMN IF NOT EXISTS home_shootout smallint;
+ALTER TABLE soccer_games ADD COLUMN IF NOT EXISTS away_shootout smallint;
+ALTER TABLE soccer_games ADD COLUMN IF NOT EXISTS note varchar(200);
 """
 
 
@@ -32,6 +77,7 @@ def create_all(engine: Engine) -> None:
         conn.execute(text(_IMMUTABLE_FN))
         conn.execute(text(_IMMUTABLE_TRIGGER))
         conn.execute(text(_SEED_SOURCES))
+        conn.execute(text(_SOCCER_COLUMNS))
         # Tables may predate the default-privileges grant; make sure the API role can read them.
         conn.execute(text("""
             DO $$ BEGIN
@@ -44,4 +90,6 @@ def create_all(engine: Engine) -> None:
 def drop_all(engine: Engine) -> None:
     with engine.begin() as conn:
         conn.execute(text("DROP TRIGGER IF EXISTS predictions_immutable ON predictions"))
+        conn.execute(text("DROP TRIGGER IF EXISTS nfl_predictions_immutable ON nfl_predictions"))
+        conn.execute(text("DROP TRIGGER IF EXISTS soccer_predictions_immutable ON soccer_predictions"))
     Base.metadata.drop_all(engine)

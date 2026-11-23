@@ -38,7 +38,8 @@ def ingest_once(engine: Engine, adapter: SourceAdapter, first_season: int, run_i
         stats["teams"] = load.upsert(conn, m.Team.__table__, data.teams, provenance=prov)
         stats["players"] = load.upsert(conn, m.Player.__table__, data.players, provenance=prov)
         stats["seasons"] = load.upsert_seasons(conn, data.games)
-        stats["games"] = load.upsert(conn, m.Game.__table__, data.games, provenance=prov)
+        games, stats["final_results_protected"] = load.protect_final_results(conn, data.games)
+        stats["games"] = load.upsert(conn, m.Game.__table__, games, provenance=prov)
         stats["team_game_stats"] = load.upsert(conn, m.TeamGameStats.__table__, data.team_game_stats, provenance=prov)
         stats["player_game_stats"] = load.upsert(conn, m.PlayerGameStats.__table__, data.player_game_stats,
                                                  provenance=prov)
@@ -50,6 +51,8 @@ def ingest_once(engine: Engine, adapter: SourceAdapter, first_season: int, run_i
                 {"ingestion_run_id": run_id, "entity": i.entity, "entity_key": i.entity_key, "rule": i.rule,
                  "severity": i.severity, "action": i.action, "detail": i.detail} for i in issues.issues])
     stats["issues"] = issues.summary()
+    if getattr(adapter, "summary", None):
+        stats["source"] = adapter.summary
     stats["source_updated_at"] = src_updated.isoformat() if src_updated else None
     return stats
 
@@ -79,6 +82,16 @@ def run_ingestion(engine: Engine, adapter: SourceAdapter, first_season: int, *, 
                 source_updated_at=adapter.source_updated_at())
         return {"run_id": run_id, "attempt": attempt, **stats}
     raise RuntimeError(f"ingestion failed after {retries} attempts") from last_error
+
+
+def last_success_source_updated_at(engine: Engine, code: str) -> datetime | None:
+    """source_updated_at of the newest successful run for a source (None if it never succeeded)."""
+    with engine.connect() as conn:
+        return conn.execute(
+            select(m.IngestionRun.source_updated_at)
+            .join(m.DataSource, m.DataSource.id == m.IngestionRun.source_id)
+            .where(m.DataSource.code == code, m.IngestionRun.status == "succeeded")
+            .order_by(m.IngestionRun.id.desc()).limit(1)).scalar()
 
 
 def _finish(engine: Engine, run_id: int, status: str, *, error: str | None = None, stats: dict | None = None,

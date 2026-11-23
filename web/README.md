@@ -4,8 +4,8 @@ Next.js 16 (App Router, Cache Components) + TypeScript + Tailwind CSS 4.
 
 The UX follows prediction-market patterns: probability-first cards, category tabs, an event page with a chart,
 outcome rows and a side panel. Nothing can be bought, sold or wagered. The side panel is a **line explorer** that
-shows the model's probability for any line. PolyPicker uses its own branding and team abbreviation badges
-instead of official logos (spec §8.1).
+shows the model's probability for any line. PolyPicker uses its own branding; teams are shown with their NBA logos
+(`public/logos/nba/{ABBR}.webp`, 256px, trimmed and shown on a white tile so they read in light and dark mode).
 
 ## Run
 
@@ -31,7 +31,7 @@ The phone experience lives in this same codebase.
 | Piece | File |
 |---|---|
 | Web app manifest (name, icons, standalone display, shortcuts, install screenshots) | `app/manifest.ts` |
-| Icons: `public/icons/*` (any + maskable), `app/apple-icon.png` (iOS), `app/icon.png` (favicon) | |
+| Brand: `public/brand/logo-{light,dark}.png` (header wordmark, generated from `design/PolyPickerLogo.png` (master art, not served): the original white-on-transparent art for dark mode, white parts recoloured to ink for light mode); app icons `public/icons/*` (any + maskable), `app/apple-icon.png` (iOS) and `app/icon.png` (favicon) stack the emblem over the wordmark on navy | |
 | iOS meta (`apple-mobile-web-app-*`), theme colors, safe-area viewport | `app/layout.tsx` |
 | Service worker: offline copies of visited pages, cached build assets, never caches live data | `public/sw.js` |
 | SW registration, install prompt (Android) / Add-to-Home-Screen hint (iOS), offline banner, bottom tab bar | `components/pwa.tsx` |
@@ -59,17 +59,51 @@ npx cloudflared tunnel --url http://localhost:3000 # prints https://<random>.try
 Open that URL on the phone and install. For a permanent public URL, deploy the web app (e.g. Vercel's free tier)
 and host the API and database somewhere reachable. Set `API_URL` to the API's address.
 
+## Sports
+
+Each sport lives under its own URL prefix, with a Polymarket-style sport tab row in the header
+(`lib/sports.ts`). Basketball is `/nba/...`, Football is `/nfl/...` (week view, game pages with
+props, box score and line explorer, standings, teams, players, accuracy vs. the betting market as a yardstick).
+Soccer is `/soccer/<league>/...` (`/soccer` -> `/soccer/epl`): match days, three-way match cards (`components/soccer/`),
+match pages with likely scores, table, clubs, accuracy; types in `lib/soccer.ts`. Club badges use ESPN team colors;
+logo files dropped into `public/logos/soccer/{espn_team_id}.webp` can be enabled in `components/ui.tsx`.
+NFL types live in `lib/nfl.ts`; football components in `components/nfl/`. `GameCard` and `TeamBadge` take a
+`league` prop; the header sections and the phone tab bar switch with the current sport. Search (⌘K, `components/SearchPalette.tsx`)
+covers every sport and competition through `GET /search/all`. `/` is the multi-sport home page, and pre-move URLs (`/games/:id`, `/teams/...`, `/players/:id`,
+`/standings`, `/accuracy`) redirect to their `/nba` equivalents (`next.config.ts`). Team logos live per
+league in `public/logos/<league>/{ABBR}.webp` (NBA, NFL: 256px WebP) and `public/logos/soccer/{espn_id}.webp`
+(downloaded by `polypicker soccer logos`; list in `lib/soccer-logos.json`).
+
 ## Pages
 
 | Route | What it shows |
 |---|---|
-| `/` (`?view=tomorrow\|upcoming\|results`, `?date=`) | Closest-matchup hero, most-confident picks, date strip, game cards |
-| `/games/[id]` | Win %, margin/total distribution chart, outcome rows, spread/total lines, factors, player props, comparison, head-to-head, settlement rules, line explorer |
-| `/teams`, `/teams/[abbr]` | Teams by division; record, ratings, last-10 margins, upcoming and completed games |
-| `/players/[id]` | Last 5 / 10 / season averages, points-by-game chart, game log (DNP shown as status, not zeros) |
-| `/standings` | Conference standings with playoff and play-in cutoffs |
-| `/accuracy` | Live vs. backtest accuracy, Brier score, calibration chart, recently graded forecasts, validation vs. baselines |
+| `/nba` (`?view=tomorrow\|upcoming\|results`, `?date=`) | Closest-matchup hero, most-confident picks, date strip, game cards |
+| `/nba/games/[id]` | Win %, margin/total distribution chart, outcome rows, spread/total lines, factors, player props, comparison, head-to-head, settlement rules, line explorer |
+| `/nba/teams`, `/nba/teams/[abbr]` | Teams by division; record, ratings, last-10 margins, upcoming and completed games |
+| `/nba/players/[id]` | Last 5 / 10 / season averages, points-by-game chart, game log (DNP shown as status, not zeros) |
+| `/nba/standings` | Conference standings with playoff and play-in cutoffs |
+| `/nba/accuracy` | Live vs. backtest accuracy, Brier score, calibration chart, recently graded forecasts, validation vs. baselines |
 | `/methodology` | How to read forecasts, inputs, honesty rules, disclaimer |
+
+## Languages (English / Spanish)
+
+The EN | ES switch in the header translates every page. URLs don't change: `proxy.ts` reads the `pp-lang` cookie
+(first visit: the browser's Accept-Language) and serves `app/[lang]/...` for that language. `/es/...` and `/en/...`
+links set the language and redirect to the plain URL, so Spanish links can be shared.
+
+- **Text:** wrap visible strings in `t("English text")`: `getT()` in Server Components (`@/lib/i18n/server`),
+  `useT()` in Client Components (`@/components/i18n`). English is the key; add the Spanish to `lib/i18n/es.json`.
+  A phrase with no entry falls back to English, never blank. Placeholders: `t("{n} games", { n })`.
+- **Sentences with bold words or links:** `rich(t("Tap <b>Add</b> then {icon}"), { icon })` (`@/lib/i18n/rich`).
+- **Words whose Spanish depends on context** (table headers, result badges): `keyed(t, "col:W", "W")`.
+- **Text from the API** (forecast labels, factor names, injury details, player explanations) goes through `t()` too:
+  exact entries in `es.json`, numbered ones via the patterns in `lib/i18n/patterns.ts`. The championship reasons are
+  written in Spanish by the backend (`reasons_es`).
+- Dates and times use the page language: pass `lang` (from `getLang()` / `useLang()`) to the `lib/format.ts` helpers.
+- **Performance:** `es.json` is only imported by `lib/i18n/server.ts`. The browser receives it through `<LangProvider dict>`
+  on Spanish pages only, so English visitors never download it. Don't import `es.json`/`es.ts` from client code.
+  The EN | ES switch refreshes in place (`router.refresh()`), with no full page reload.
 
 ## Structure
 

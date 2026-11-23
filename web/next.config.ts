@@ -20,6 +20,16 @@ const nextConfig: NextConfig = {
   async rewrites() {
     return [{ source: "/api/v1/:path*", destination: `${API_URL}/:path*` }];
   },
+  // Sports live under their own prefix (/nba, /nfl, /soccer); "/" is the multi-sport home page. Links from
+  // before the move (bookmarks, installed apps, shared URLs) keep working.
+  async redirects() {
+    return [
+      ...["games", "teams", "players"].map((p) => ({ source: `/${p}/:path*`, destination: `/nba/${p}/:path*`, permanent: true })),
+      { source: "/teams", destination: "/nba/teams", permanent: true },
+      { source: "/standings", destination: "/nba/standings", permanent: true },
+      { source: "/accuracy", destination: "/nba/accuracy", permanent: true },
+    ];
+  },
   async headers() {
     return [
       {

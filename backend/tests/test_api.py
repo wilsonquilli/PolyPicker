@@ -71,6 +71,17 @@ def test_win_probabilities_sum_to_100(client):
     assert w["home"]["probability"] + w["away"]["probability"] == pytest.approx(1.0)
 
 
+def test_history_one_per_game_has_no_duplicates(client):
+    """The accuracy page's "Recently graded" list: one row per game (or player), final revision only."""
+    for cat in ("winner", "spread", "total", "points"):
+        rows = client.get("/api/v1/predictions/history", params={
+            "category": cat, "state": "final", "probabilities_only": True, "one_per_game": True, "limit": 200}).json()["data"]
+        keys = [(r["kind"], r["game_id"], r["subject_id"]) for r in rows]
+        assert len(keys) == len(set(keys)), cat
+        if cat == "winner":
+            assert all(r["probability"] >= 0.5 for r in rows)
+
+
 def test_dnp_rows_have_null_stats(client):
     from polypicker.db.session import api_engine
     with api_engine().connect() as c:

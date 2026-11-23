@@ -1,29 +1,33 @@
 // Formatting helpers. Game times are shown in US-Eastern, the NBA's reference time zone,
 // which also keeps server and client output identical (no hydration mismatch).
 
+import { intlLocale, type Lang } from "@/lib/i18n";
+
 const ET = "America/New_York";
+// Dates follow the page language ("Nov 22" / "22 nov"); the last argument is the language, English by default.
+const L = (lang: Lang) => intlLocale(lang);
 
-export function tipoffTime(iso: string): string {
-  return new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit", timeZone: ET }).format(new Date(iso)) + " ET";
+export function tipoffTime(iso: string, lang: Lang = "en"): string {
+  return new Intl.DateTimeFormat(L(lang), { hour: "numeric", minute: "2-digit", timeZone: ET }).format(new Date(iso)) + " ET";
 }
 
-export function longDate(isoDate: string): string {
+export function longDate(isoDate: string, lang: Lang = "en"): string {
   // isoDate is a calendar date (YYYY-MM-DD); format at noon UTC to avoid TZ edge cases.
-  return new Intl.DateTimeFormat("en-US", { weekday: "long", month: "long", day: "numeric", timeZone: "UTC" })
+  return new Intl.DateTimeFormat(L(lang), { weekday: "long", month: "long", day: "numeric", timeZone: "UTC" })
     .format(new Date(`${isoDate}T12:00:00Z`));
 }
 
-export function shortDate(isoDate: string): string {
-  return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", timeZone: "UTC" })
+export function shortDate(isoDate: string, lang: Lang = "en"): string {
+  return new Intl.DateTimeFormat(L(lang), { month: "short", day: "numeric", timeZone: "UTC" })
     .format(new Date(`${isoDate}T12:00:00Z`));
 }
 
-export function weekday(isoDate: string): string {
-  return new Intl.DateTimeFormat("en-US", { weekday: "short", timeZone: "UTC" }).format(new Date(`${isoDate}T12:00:00Z`));
+export function weekday(isoDate: string, lang: Lang = "en"): string {
+  return new Intl.DateTimeFormat(L(lang), { weekday: "short", timeZone: "UTC" }).format(new Date(`${isoDate}T12:00:00Z`));
 }
 
-export function dateTimeET(iso: string): string {
-  return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit",
+export function dateTimeET(iso: string, lang: Lang = "en"): string {
+  return new Intl.DateTimeFormat(L(lang), { month: "short", day: "numeric", hour: "numeric", minute: "2-digit",
     timeZone: ET }).format(new Date(iso)) + " ET";
 }
 

@@ -5,16 +5,16 @@ import type { MetadataRoute } from "next";
 export default function manifest(): MetadataRoute.Manifest {
   return {
     id: "/",
-    name: "PolyPicker — NBA forecasts",
+    name: "PolyPicker — sports forecasts",
     short_name: "PolyPicker",
-    description: "Model-based NBA win probabilities, projected scores and player stat forecasts. Read-only; no wagering.",
+    description: "Model-based sports forecasts: win probabilities, projected scores and player stat forecasts. Read-only; no wagering.",
     start_url: "/?source=pwa",
     scope: "/",
     display: "standalone",
     display_override: ["standalone", "minimal-ui"],
     orientation: "any",
     background_color: "#ffffff",
-    theme_color: "#6345ed",
+    theme_color: "#1f6ffc",
     categories: ["sports", "news"],
     lang: "en-US",
     dir: "ltr",
@@ -26,9 +26,11 @@ export default function manifest(): MetadataRoute.Manifest {
     ],
     // Long-press the app icon (Android) for these.
     shortcuts: [
-      { name: "Today's games", short_name: "Today", url: "/?source=pwa-shortcut", icons: [{ src: "/icons/icon-192.png", sizes: "192x192" }] },
-      { name: "Upcoming games", short_name: "Upcoming", url: "/?view=upcoming&source=pwa-shortcut", icons: [{ src: "/icons/icon-192.png", sizes: "192x192" }] },
-      { name: "Model accuracy", short_name: "Accuracy", url: "/accuracy?source=pwa-shortcut", icons: [{ src: "/icons/icon-192.png", sizes: "192x192" }] },
+      { name: "Today's NBA games", short_name: "Today", url: "/nba?source=pwa-shortcut", icons: [{ src: "/icons/icon-192.png", sizes: "192x192" }] },
+      { name: "Upcoming games", short_name: "Upcoming", url: "/nba?view=upcoming&source=pwa-shortcut", icons: [{ src: "/icons/icon-192.png", sizes: "192x192" }] },
+      { name: "This week's NFL games", short_name: "NFL", url: "/nfl?source=pwa-shortcut", icons: [{ src: "/icons/icon-192.png", sizes: "192x192" }] },
+      { name: "Soccer competitions", short_name: "Soccer", url: "/soccer?source=pwa-shortcut", icons: [{ src: "/icons/icon-192.png", sizes: "192x192" }] },
+      { name: "Model accuracy", short_name: "Accuracy", url: "/nba/accuracy?source=pwa-shortcut", icons: [{ src: "/icons/icon-192.png", sizes: "192x192" }] },
     ],
     // Shown in Android's richer install dialog.
     screenshots: [

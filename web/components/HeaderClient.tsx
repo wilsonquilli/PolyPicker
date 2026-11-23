@@ -1,150 +1,164 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useId, useRef, useState, useSyncExternalStore } from "react";
+import { usePathname, useSearchParams } from "next/navigation";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 
-import type { SearchResult } from "@/lib/types";
-import { teamColor } from "@/lib/teams";
+import { useLang, useSwitchLanguage, useT } from "@/components/i18n";
+import { SPORTS } from "@/lib/sports";
+import { LEAGUE_SLUGS, REGIONS, SOCCER_LEAGUES, soccerSlugOf } from "@/lib/soccer";
 
-const API = process.env.NEXT_PUBLIC_API_URL ?? "/api/v1";
-
-const CATEGORIES = [
-  { href: "/", view: "today", label: "Today" },
-  { href: "/?view=tomorrow", view: "tomorrow", label: "Tomorrow" },
-  { href: "/?view=upcoming", view: "upcoming", label: "Upcoming" },
-  { href: "/?view=results", view: "results", label: "Results" },
-  { href: "/standings", label: "Standings" },
-  { href: "/teams", label: "Teams" },
-  { href: "/accuracy", label: "Accuracy" },
-  { href: "/methodology", label: "How it works" },
+const NBA_SECTIONS = [
+  { href: "/nba", view: "today", label: "Today" },
+  { href: "/nba?view=tomorrow", view: "tomorrow", label: "Tomorrow" },
+  { href: "/nba?view=upcoming", view: "upcoming", label: "Upcoming" },
+  { href: "/nba?view=results", view: "results", label: "Results" },
+  { href: "/nba/standings", label: "Standings" },
+  { href: "/nba/teams", label: "Teams" },
+  { href: "/nba/value", label: "Value" },
+  { href: "/nba/accuracy", label: "Accuracy" },
 ];
 
+const NFL_SECTIONS = [
+  { href: "/nfl", label: "Games" },
+  { href: "/nfl/standings", label: "Standings" },
+  { href: "/nfl/teams", label: "Teams" },
+  { href: "/nfl/accuracy", label: "Accuracy" },
+];
+
+const soccerSections = (base: string) => [
+  { href: base, label: "Matches" },
+  { href: `${base}/table`, label: SOCCER_LEAGUES[soccerSlugOf(base)].kind === "cup" ? "Standings" : "Table" },
+  { href: `${base}/teams`, label: "Clubs" },
+  { href: `${base}/accuracy`, label: "Accuracy" },
+];
+
+/** Dropdown of every soccer competition, grouped by region. Fixed-position panel so the scrolling nav row can't clip it. */
+function LeaguePicker({ current }: { current: string | null }) {
+  const t = useT();
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState({ left: 16, top: 100 });
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node)) setOpen(false); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", onDoc);
+    document.addEventListener("keydown", onKey);
+    return () => { document.removeEventListener("mousedown", onDoc); document.removeEventListener("keydown", onKey); };
+  }, [open]);
+  const lg = current ? SOCCER_LEAGUES[current as keyof typeof SOCCER_LEAGUES] : null;
+  return (
+    <div ref={ref}>
+      <button type="button" aria-haspopup="menu" aria-expanded={open}
+        onClick={(e) => {
+          const r = e.currentTarget.getBoundingClientRect();
+          setPos({ left: Math.max(8, Math.min(r.left, window.innerWidth - 296)), top: r.bottom + 6 });
+          setOpen((o) => !o);
+        }}
+        className={`${pill(true)} ring-1 ring-line`}>
+        {lg ? <><span aria-hidden>{lg.flag}</span>{lg.name}</> : t("All competitions")}
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden><path d="m6 9 6 6 6-6" /></svg>
+      </button>
+      {open && (
+        <div role="menu" style={{ left: pos.left, top: pos.top }}
+          className="fixed z-50 w-72 rounded-xl border border-line bg-surface p-2 shadow-lg">
+          <Link role="menuitem" href="/soccer" className="block rounded-lg px-3 py-1.5 text-sm text-muted hover:bg-surface-2 hover:text-ink">{t("All competitions")}</Link>
+          {REGIONS.map((region) => (
+            <div key={region} className="mt-1">
+              <div className="px-3 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wider text-faint">{t(region)}</div>
+              {LEAGUE_SLUGS.filter((s) => SOCCER_LEAGUES[s].region === region).map((s) => (
+                <Link key={s} role="menuitem" href={`/soccer/${s}`} aria-current={s === current ? "page" : undefined}
+                  className={`flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm ${s === current ? "bg-surface-2 font-semibold text-ink" : "text-muted hover:bg-surface-2 hover:text-ink"}`}>
+                  <span aria-hidden className="w-5 text-center">{SOCCER_LEAGUES[s].flag}</span>{SOCCER_LEAGUES[s].name}
+                  <span className="ml-auto text-[11px] text-faint">{t(SOCCER_LEAGUES[s].country)}</span>
+                </Link>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const pill = (active: boolean) =>
+  `flex items-center gap-1.5 whitespace-nowrap rounded-lg px-3 py-1.5 font-medium transition ${
+    active ? "bg-surface-2 text-ink" : "text-muted hover:text-ink"}`;
+
+/** Sport tabs (all screens) + the current sport's sections (desktop; phones use the bottom tab bar). */
 export function CategoryNav() {
+  const t = useT();
   const path = usePathname();
   const view = useSearchParams().get("view") ?? "today";
+  const inNba = path === "/nba" || path.startsWith("/nba/");
+  const soccerSlug = soccerSlugOf(path);
   return (
-    <nav aria-label="Categories" className="mx-auto max-w-[1400px] px-4 sm:px-6">
-      <ul className="no-scrollbar flex gap-1 overflow-x-auto pb-2 text-sm">
-        {CATEGORIES.map((c) => {
-          const active = c.view ? path === "/" && view === c.view : path.startsWith(c.href);
+    <nav aria-label={t("Sports")} className="mx-auto max-w-[1400px] px-4 sm:px-6">
+      <ul className="no-scrollbar flex items-center gap-1 overflow-x-auto pb-2 text-sm">
+        <li>
+          <Link href="/" aria-current={path === "/" ? "page" : undefined} className={`${pill(path === "/")} font-semibold`}>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M3 17l6-6 4 4 8-8M15 7h6v6" /></svg>
+            {t("Trending")}
+          </Link>
+        </li>
+        <li aria-hidden className="mx-1 h-5 w-px bg-line" />
+        {SPORTS.map((s) => {
+          const active = path === s.prefix || path.startsWith(`${s.prefix}/`);
           return (
-            <li key={c.label}>
-              <Link
-                href={c.href}
-                aria-current={active ? "page" : undefined}
-                className={`block whitespace-nowrap rounded-lg px-3 py-1.5 font-medium transition ${
-                  active ? "bg-surface-2 text-ink" : "text-muted hover:text-ink"}`}
-              >
-                {c.label}
+            <li key={s.prefix}>
+              <Link href={s.href} aria-current={active ? "page" : undefined} className={`${pill(active)} font-semibold`}>
+                <span aria-hidden>{s.icon}</span>{t(s.label)}
+                {!s.ready && <span className="rounded bg-accent-soft px-1.5 py-px text-[10px] font-semibold text-accent">{t("Soon")}</span>}
               </Link>
             </li>
           );
         })}
+        {path.startsWith("/soccer") && (
+          <>
+            {/* Competition picker: shown on every screen size (phones have no other way to change competition). */}
+            <li aria-hidden className="mx-2 h-5 w-px bg-line" />
+            <li><LeaguePicker key={path} current={path === "/soccer" ? null : soccerSlug} /></li>{/* remount = close on navigation */}
+            {path !== "/soccer" && <li aria-hidden className="mx-2 hidden h-5 w-px bg-line md:block" />}
+            {path !== "/soccer" && soccerSections(`/soccer/${soccerSlug}`).map((c) => {
+              const base = `/soccer/${soccerSlug}`;
+              const active = c.href === base ? path === base || path.startsWith(`${base}/games`) : path.startsWith(c.href);
+              return (
+                <li key={c.label} className="hidden md:block">
+                  <Link href={c.href} aria-current={active ? "page" : undefined} className={pill(active)}>{t(c.label)}</Link>
+                </li>
+              );
+            })}
+          </>
+        )}
+        {path.startsWith("/nfl") && (
+          <>
+            <li aria-hidden className="mx-2 hidden h-5 w-px bg-line md:block" />
+            {NFL_SECTIONS.map((c) => {
+              const active = c.href === "/nfl" ? path === "/nfl" || path.startsWith("/nfl/games") : path.startsWith(c.href);
+              return (
+                <li key={c.label} className="hidden md:block">
+                  <Link href={c.href} aria-current={active ? "page" : undefined} className={pill(active)}>{t(c.label)}</Link>
+                </li>
+              );
+            })}
+          </>
+        )}
+        {inNba && (
+          <>
+            <li aria-hidden className="mx-2 hidden h-5 w-px bg-line md:block" />
+            {NBA_SECTIONS.map((c) => {
+              const active = c.view ? path === "/nba" && view === c.view : path.startsWith(c.href);
+              return (
+                <li key={c.label} className="hidden md:block">
+                  <Link href={c.href} aria-current={active ? "page" : undefined} className={pill(active)}>{t(c.label)}</Link>
+                </li>
+              );
+            })}
+          </>
+        )}
       </ul>
     </nav>
-  );
-}
-
-export function SearchBox() {
-  const [q, setQ] = useState("");
-  const [results, setResults] = useState<SearchResult[]>([]);
-  const [open, setOpen] = useState(false);
-  const [active, setActive] = useState(0);
-  const [error, setError] = useState(false);
-  const router = useRouter();
-  const listId = useId();
-  const boxRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (q.trim().length < 2) return;
-    const ctrl = new AbortController();
-    const t = setTimeout(async () => {
-      try {
-        const r = await fetch(`${API}/search?q=${encodeURIComponent(q.trim())}&limit=8`, { signal: ctrl.signal });
-        const body = await r.json();
-        setResults(body.data ?? []);
-        setError(false);
-        setActive(0);
-      } catch (e) {
-        if ((e as Error).name !== "AbortError") setError(true);
-      }
-    }, 180);
-    return () => {
-      clearTimeout(t);
-      ctrl.abort();
-    };
-  }, [q]);
-
-  useEffect(() => {
-    const onDoc = (e: MouseEvent) => {
-      if (!boxRef.current?.contains(e.target as Node)) setOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "/" && document.activeElement?.tagName !== "INPUT") {
-        e.preventDefault();
-        boxRef.current?.querySelector("input")?.focus();
-      }
-    };
-    document.addEventListener("mousedown", onDoc);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onDoc);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, []);
-
-  const shown = q.trim().length >= 2 ? results : [];
-  const hrefFor = (r: SearchResult) => (r.type === "team" ? `/teams/${r.subtitle}` : `/players/${r.id}`);
-
-  return (
-    <div ref={boxRef} className="relative w-full max-w-xl">
-      <svg className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-faint" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
-        <circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" />
-      </svg>
-      <input
-        type="search"
-        role="combobox"
-        aria-expanded={open && shown.length > 0}
-        aria-controls={listId}
-        aria-label="Search teams and players"
-        placeholder="Search teams and players"
-        value={q}
-        onChange={(e) => { setQ(e.target.value); setOpen(true); }}
-        onFocus={() => setOpen(true)}
-        onKeyDown={(e) => {
-          if (e.key === "ArrowDown") { e.preventDefault(); setActive((a) => Math.min(a + 1, shown.length - 1)); }
-          if (e.key === "ArrowUp") { e.preventDefault(); setActive((a) => Math.max(a - 1, 0)); }
-          if (e.key === "Enter" && shown[active]) { router.push(hrefFor(shown[active])); setOpen(false); setQ(""); }
-          if (e.key === "Escape") setOpen(false);
-        }}
-        className="h-10 w-full rounded-xl border border-line bg-surface-2 pl-9 pr-10 text-sm outline-none placeholder:text-faint focus:border-accent/50 focus:bg-surface"
-      />
-      <kbd className="pointer-events-none absolute right-3 top-1/2 hidden -translate-y-1/2 rounded border border-line px-1.5 text-[10px] text-faint sm:block">/</kbd>
-      {open && q.trim().length >= 2 && (
-        <ul id={listId} role="listbox" className="absolute left-0 right-0 top-12 z-50 overflow-hidden rounded-xl border border-line bg-surface py-1 shadow-lg">
-          {error && <li className="px-4 py-3 text-sm text-muted">Search is unavailable right now.</li>}
-          {!error && shown.length === 0 && <li className="px-4 py-3 text-sm text-muted">No teams or players match “{q}”.</li>}
-          {shown.map((r, i) => (
-            <li key={`${r.type}-${r.id}`} role="option" aria-selected={i === active}>
-              <Link
-                href={hrefFor(r)}
-                onClick={() => { setOpen(false); setQ(""); }}
-                onMouseEnter={() => setActive(i)}
-                className={`flex items-center gap-3 px-4 py-2 text-sm ${i === active ? "bg-surface-2" : ""}`}
-              >
-                <span className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[10px] font-bold text-white"
-                  style={{ background: r.subtitle ? teamColor(r.subtitle) : "var(--text-faint)" }}>
-                  {r.type === "team" ? r.subtitle : r.name.split(" ").map((s) => s[0]).slice(0, 2).join("")}
-                </span>
-                <span className="flex-1 truncate font-medium">{r.name}</span>
-                <span className="text-xs text-muted">{r.type === "team" ? "Team" : r.subtitle}</span>
-              </Link>
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
   );
 }
 
@@ -156,6 +170,7 @@ function subscribeTheme(cb: () => void) {
 }
 
 export function ThemeToggle() {
+  const t = useT();
   const dark = useSyncExternalStore(subscribeTheme, () => document.documentElement.classList.contains("dark"), () => false);
   const toggle = () => {
     const next = !document.documentElement.classList.contains("dark");
@@ -163,7 +178,7 @@ export function ThemeToggle() {
     try { localStorage.setItem("pp-theme", next ? "dark" : "light"); } catch {}
   };
   return (
-    <button onClick={toggle} aria-label={dark ? "Switch to light mode" : "Switch to dark mode"}
+    <button onClick={toggle} aria-label={dark ? t("Switch to light mode") : t("Switch to dark mode")}
       className="rounded-lg p-2 text-muted hover:bg-surface-2 hover:text-ink">
       {dark ? (
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" /></svg>
@@ -171,5 +186,24 @@ export function ThemeToggle() {
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z" /></svg>
       )}
     </button>
+  );
+}
+
+/** EN | ES switch. The choice is saved in a cookie (proxy.ts serves that language on every page) and survives visits. */
+export function LanguageToggle() {
+  const lang = useLang();
+  const t = useT();
+  const [pending, switchTo] = useSwitchLanguage();
+  return (
+    <div role="group" aria-label={t("Language")} aria-busy={pending}
+      className={`flex items-center rounded-lg bg-surface-2 p-0.5 text-xs font-semibold transition-opacity ${pending ? "opacity-60" : ""}`}>
+      {(["en", "es"] as const).map((l) => (
+        <button key={l} type="button" lang={l} aria-pressed={lang === l} disabled={pending} onClick={() => lang !== l && switchTo(l)}
+          title={l === "en" ? "English" : "Español"}
+          className={`rounded-md px-2 py-1 uppercase transition ${lang === l ? "bg-surface text-ink shadow-card" : "text-muted hover:text-ink"}`}>
+          {l}
+        </button>
+      ))}
+    </div>
   );
 }

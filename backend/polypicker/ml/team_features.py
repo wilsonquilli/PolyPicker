@@ -17,6 +17,8 @@ from datetime import date
 
 import polars as pl
 
+from polypicker.ml.venues import ALTITUDE_M, ARENAS, km, venue
+
 LEAGUE_ORTG_SEED = 114.5   # points per 100 possessions, recent-era league average
 LEAGUE_PACE_SEED = 99.0
 PRIOR_GAMES = 8            # weight (in games) of the prior when blending early-season stats
@@ -82,8 +84,11 @@ def elo_win_prob(diff: float) -> float:
     return 1 / (1 + 10 ** (-diff / 400))
 
 
+# Travel / schedule-density features (travel_km ... visitor_altitude) were tested for game model v2 on the
+# 2024-25 and 2025-26 hold-outs (2026-11-21) and did not improve accuracy or log loss beyond rest days and
+# back-to-backs, so the game model doesn't use them. They stay available as context.
 TEAM_FEATURES = ["ortg", "drtg", "pace", "ortg_l10", "drtg_l10", "net_l10", "elo", "rest_days", "b2b",
-                 "season_games"]
+                 "season_games", "travel_km", "tz_shift", "games_l6", "three_in_four", "road_trip", "visitor_altitude"]
 
 
 def build_team_features(games: pl.DataFrame, team_box: pl.DataFrame) -> pl.DataFrame:
@@ -92,6 +97,10 @@ def build_team_features(games: pl.DataFrame, team_box: pl.DataFrame) -> pl.DataF
     states: dict[int, _TeamState] = defaultdict(_TeamState)
     league = _League()
     last_sched: dict[int, date] = {}
+    # travel / schedule density (from the schedule, known in advance)
+    last_venue: dict[int, tuple] = {}
+    recent_dates: dict[int, deque] = defaultdict(lambda: deque(maxlen=8))
+    away_streak: dict[int, int] = defaultdict(int)
     out: list[dict] = []
 
     for (day,), day_games in games.sort("tipoff_utc").group_by(["game_date_et"], maintain_order=True):
@@ -117,16 +126,35 @@ def build_team_features(games: pl.DataFrame, team_box: pl.DataFrame) -> pl.DataF
                 d10 = _rtg(rec, "opp_pts") if rec else drtg
                 prev = last_sched.get(team)
                 rest = min((day - prev).days, 4) if prev else 4
+                here = venue(g["home_team_id"], g.get("arena_city"))
+                before = last_venue.get(team)
+                fresh = prev is None or (day - prev).days > 10  # season start / long break: no travel carry-over
+                travel = km(before, here) if (here and before and not fresh) else 0.0
+                tz = (here[2] - before[2]) if (here and before and not fresh) else 0.0
+                dates = recent_dates[team]
+                g6 = sum(1 for d0 in dates if 0 < (day - d0).days <= 6)
+                g3 = sum(1 for d0 in dates if 0 < (day - d0).days <= 3)
+                home_alt = ARENAS.get(team, (0, 0, 0, 0))[3]
+                trip = 0 if is_home else away_streak[team] + 1
                 out.append({"game_id": g["game_id"], "team_id": team, "opp_team_id": opp,
                             "is_home": is_home, "season": season, "game_date_et": day,
                             "status": g["status"], "ortg": ortg, "drtg": drtg, "pace": pace,
                             "ortg_l10": o10, "drtg_l10": d10, "net_l10": o10 - d10, "elo": st.elo,
                             "rest_days": rest, "b2b": rest == 1, "season_games": n,
+                            "travel_km": travel, "tz_shift": tz, "games_l6": g6, "three_in_four": g3 >= 2,
+                            "road_trip": min(trip, 8),
+                            "visitor_altitude": bool(here and here[3] > ALTITUDE_M and home_alt < ALTITUDE_M),
                             "league_ortg": lg_ortg, "league_pace": lg_pace})
         # 2) apply today's results
         for g in rows:
+            here = venue(g["home_team_id"], g.get("arena_city"))
             for t in (g["home_team_id"], g["away_team_id"]):
                 last_sched[t] = day
+                recent_dates[t].append(day)
+                if here:
+                    last_venue[t] = here
+            away_streak[g["home_team_id"]] = 0
+            away_streak[g["away_team_id"]] += 1
             if g["status"] != "final":
                 continue
             h, a = box.get((g["game_id"], g["home_team_id"])), box.get((g["game_id"], g["away_team_id"]))

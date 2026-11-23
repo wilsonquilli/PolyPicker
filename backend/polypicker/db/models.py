@@ -237,6 +237,161 @@ class PlayerGameStats(ProvenanceMixin, Base):
     )
 
 
+class NbaInjuryReport(ProvenanceMixin, Base):
+    """ESPN injury report, one row per player per ET day (the day's latest status wins).
+
+    Kept per day rather than overwritten so a forecast can be traced to the report it saw.
+    ``player_id`` is matched by name within the team (NULL when no confident match).
+    """
+    __tablename__ = "nba_injury_reports"
+    report_date: Mapped[date] = mapped_column(Date, primary_key=True)
+    espn_athlete_id: Mapped[str] = mapped_column(String(16), primary_key=True)
+    player_id: Mapped[int | None] = mapped_column(ForeignKey("players.player_id"))
+    team_id: Mapped[int] = mapped_column(ForeignKey("teams.team_id"))
+    player_name: Mapped[str] = mapped_column(String(128))
+    status: Mapped[str] = mapped_column(String(32))          # Out | Doubtful | Questionable | Day-To-Day | ...
+    detail: Mapped[str | None] = mapped_column(String(128))  # e.g. "Back strain"
+    short_comment: Mapped[str | None] = mapped_column(Text)
+    return_date: Mapped[date | None] = mapped_column(Date)
+    reported_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    __table_args__ = (Index("ix_nba_injuries_team_date", "team_id", "report_date"),)
+
+
+class NbaOdds(ProvenanceMixin, Base):
+    """Sportsbook line per game (ESPN odds feed): one preferred book, closing line once the game starts.
+
+    ``p_home`` is the moneyline converted to a probability with the bookmaker margin removed
+    (normalised implied probabilities). For upcoming games the row tracks the current line.
+    """
+    __tablename__ = "nba_odds"
+    game_id: Mapped[int] = mapped_column(ForeignKey("games.game_id"), primary_key=True)
+    espn_event_id: Mapped[str] = mapped_column(String(16))
+    provider: Mapped[str] = mapped_column(String(64))
+    home_ml: Mapped[int | None] = mapped_column(Integer)
+    away_ml: Mapped[int | None] = mapped_column(Integer)
+    open_home_ml: Mapped[int | None] = mapped_column(Integer)
+    open_away_ml: Mapped[int | None] = mapped_column(Integer)
+    spread_home: Mapped[float | None] = mapped_column(Float)   # home handicap, e.g. -5.5 = home favoured by 5.5
+    total: Mapped[float | None] = mapped_column(Float)
+    p_home: Mapped[float | None] = mapped_column(Float)
+    p_home_open: Mapped[float | None] = mapped_column(Float)
+    is_closing: Mapped[bool] = mapped_column(Boolean, default=False)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class PolymarketNba(ProvenanceMixin, Base):
+    """Polymarket moneyline market per NBA game (Gamma API + CLOB price history).
+
+    ``p_home_live`` is the latest traded/mid price of the home outcome while the market is open;
+    ``p_home_pregame`` the last price at or before tip-off (the comparison we grade).
+    """
+    __tablename__ = "polymarket_nba"
+    game_id: Mapped[int] = mapped_column(ForeignKey("games.game_id"), primary_key=True)
+    market_id: Mapped[str] = mapped_column(String(32))
+    slug: Mapped[str] = mapped_column(String(160))
+    event_slug: Mapped[str | None] = mapped_column(String(160))
+    condition_id: Mapped[str | None] = mapped_column(String(80))
+    token_home: Mapped[str] = mapped_column(String(100))
+    token_away: Mapped[str] = mapped_column(String(100))
+    p_home_live: Mapped[float | None] = mapped_column(Float)
+    p_home_pregame: Mapped[float | None] = mapped_column(Float)
+    pregame_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    volume_usd: Mapped[float | None] = mapped_column(Float)
+    liquidity_usd: Mapped[float | None] = mapped_column(Float)
+    closed: Mapped[bool] = mapped_column(Boolean, default=False)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class NbaOddsBook(ProvenanceMixin, Base):
+    """Every sportsbook's game line (ESPN odds feed): opening and closing/current moneyline, spread, total.
+    Feeds line shopping and closing-line value; ``nba_odds`` keeps the single preferred book."""
+    __tablename__ = "nba_odds_books"
+    game_id: Mapped[int] = mapped_column(ForeignKey("games.game_id"), primary_key=True)
+    provider: Mapped[str] = mapped_column(String(64), primary_key=True)
+    home_ml_open: Mapped[int | None] = mapped_column(Integer)
+    away_ml_open: Mapped[int | None] = mapped_column(Integer)
+    home_ml: Mapped[int | None] = mapped_column(Integer)        # closing once the game starts, current before
+    away_ml: Mapped[int | None] = mapped_column(Integer)
+    spread_home_open: Mapped[float | None] = mapped_column(Float)
+    spread_home: Mapped[float | None] = mapped_column(Float)
+    total_open: Mapped[float | None] = mapped_column(Float)
+    total: Mapped[float | None] = mapped_column(Float)
+    is_closing: Mapped[bool] = mapped_column(Boolean, default=False)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class NbaPropOdds(ProvenanceMixin, Base):
+    """Player over/under prop prices (ESPN odds feed, one book per game): opening and closing/current line
+    with decimal odds for over and under. Stats limited to the ones PolyPicker models."""
+    __tablename__ = "nba_prop_odds"
+    game_id: Mapped[int] = mapped_column(ForeignKey("games.game_id"), primary_key=True)
+    player_id: Mapped[int] = mapped_column(ForeignKey("players.player_id"), primary_key=True)
+    stat: Mapped[str] = mapped_column(String(16), primary_key=True)   # points | rebounds | assists
+    provider: Mapped[str] = mapped_column(String(64))
+    espn_athlete_id: Mapped[str] = mapped_column(String(16))
+    line_open: Mapped[float | None] = mapped_column(Float)
+    over_open: Mapped[float | None] = mapped_column(Float)
+    under_open: Mapped[float | None] = mapped_column(Float)
+    line: Mapped[float | None] = mapped_column(Float)
+    over: Mapped[float | None] = mapped_column(Float)
+    under: Mapped[float | None] = mapped_column(Float)
+    is_closing: Mapped[bool] = mapped_column(Boolean, default=False)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class EspnNbaAthlete(Base):
+    """ESPN athlete id -> our player id (matched by name), cached so props don't re-fetch athletes."""
+    __tablename__ = "espn_nba_athletes"
+    espn_athlete_id: Mapped[str] = mapped_column(String(16), primary_key=True)
+    name: Mapped[str] = mapped_column(String(128))
+    player_id: Mapped[int | None] = mapped_column(ForeignKey("players.player_id"))
+
+
+class ValuePick(Base):
+    """A value bet flagged live: our probability vs the best price on offer, frozen the first time it
+    qualified (for honest CLV), then settled after the game. ``last_*`` track later refreshes."""
+    __tablename__ = "value_picks"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    game_id: Mapped[int] = mapped_column(ForeignKey("games.game_id"), index=True)
+    market: Mapped[str] = mapped_column(String(32))            # moneyline | player_points | ...
+    player_id: Mapped[int | None] = mapped_column(ForeignKey("players.player_id"))
+    side: Mapped[str] = mapped_column(String(8))                # home | away | over | under
+    line: Mapped[float | None] = mapped_column(Float)
+    our_p: Mapped[float] = mapped_column(Float)
+    push_p: Mapped[float] = mapped_column(Float, default=0.0)
+    price_dec: Mapped[float] = mapped_column(Float)
+    book: Mapped[str] = mapped_column(String(64))
+    fair_p: Mapped[float | None] = mapped_column(Float)         # book's no-vig probability of our side when flagged
+    ev: Mapped[float] = mapped_column(Float)
+    kelly: Mapped[float] = mapped_column(Float)
+    prediction_revision: Mapped[int | None] = mapped_column(Integer)
+    flagged_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    last_our_p: Mapped[float | None] = mapped_column(Float)
+    last_price_dec: Mapped[float | None] = mapped_column(Float)
+    last_book: Mapped[str | None] = mapped_column(String(64))
+    last_ev: Mapped[float | None] = mapped_column(Float)
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    close_price_dec: Mapped[float | None] = mapped_column(Float)
+    close_line: Mapped[float | None] = mapped_column(Float)
+    clv_prob: Mapped[float | None] = mapped_column(Float)
+    beat_close: Mapped[bool | None] = mapped_column(Boolean)
+    result: Mapped[str | None] = mapped_column(String(8))       # win | loss | push | void
+    profit: Mapped[float | None] = mapped_column(Float)         # units, 1-unit stake
+    graded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    __table_args__ = (UniqueConstraint("game_id", "market", "player_id", "side", name="uq_value_pick"),)
+
+
+class ValueBacktest(Base):
+    """Stored value-finder backtest reports (winners / props per season) for the Value page."""
+    __tablename__ = "value_backtests"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    created_at: Mapped[datetime] = _now()
+    market: Mapped[str] = mapped_column(String(16))
+    season: Mapped[int] = mapped_column(SmallInteger)
+    report: Mapped[dict] = mapped_column(JSONB)
+
+
 # ---------------------------------------------------------------- models & predictions
 
 class Model(Base):
@@ -323,3 +478,21 @@ class AdminAuditEvent(Base):
     action: Mapped[str] = mapped_column(String(64))
     detail: Mapped[dict | None] = mapped_column(JSONB)
     created_at: Mapped[datetime] = _now()
+
+
+# ---------------------------------------------------------------- championship forecasts
+
+class FuturesForecast(Base):
+    """Season simulation for one competition: each team's chance to win it, plus the stats behind the pick.
+
+    One row per run; readers take the latest row per competition. ``payload`` holds the team list
+    (probabilities, current record, ratings) built by ``polypicker.futures``."""
+    __tablename__ = "futures_forecasts"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    sport: Mapped[str] = mapped_column(String(16))            # nba | nfl | soccer
+    competition: Mapped[str] = mapped_column(String(32))      # nba | nfl | soccer league slug (epl, ucl, ...)
+    season: Mapped[int] = mapped_column(SmallInteger)
+    simulations: Mapped[int] = mapped_column(Integer)
+    payload: Mapped[dict] = mapped_column(JSONB)
+    generated_at: Mapped[datetime] = _now()
+    __table_args__ = (Index("ix_futures_comp_time", "competition", "generated_at"),)

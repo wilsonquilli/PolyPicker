@@ -9,8 +9,8 @@ Two outputs:
                     pregame information (roster history), never from who actually played.
                     Used for backtests and live predictions.
 
-No injury/lineup feed is licensed yet, so availability is inferred from recent box-score
-status (played / DNP / inactive) and labeled as such.
+Availability here is inferred from recent box-score status (played / DNP / inactive); for
+upcoming games the pipeline overrides it with the ESPN injury report when a player is listed.
 """
 
 from __future__ import annotations

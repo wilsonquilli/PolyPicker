@@ -1,14 +1,48 @@
-import Link from "next/link";
 import type { ReactNode } from "react";
 
-import { teamColor } from "@/lib/teams";
+import { NFL_COLORS } from "@/lib/nfl";
+import soccerLogoIds from "@/lib/soccer-logos.json";
+import { hasTeamLogo, teamColor } from "@/lib/teams";
 
-export function TeamBadge({ abbr, size = 32, className = "" }: { abbr: string; size?: number; className?: string }) {
+// Text-bearing pieces live in a client module so they read the page language; re-exported here.
+export { Breadcrumbs, FormChips, Gauge, ProbBar, StatusPill, TriBar } from "@/components/ui-client";
+
+/** ESPN team ids with a logo file in public/logos/soccer/{id}.webp. Written by `polypicker soccer logos` (part of
+ *  run-all), which downloads each new club's logo once. Clubs without a file fall back to a colored abbreviation badge. */
+const SOCCER_LOGOS = new Set<number>(soccerLogoIds);
+
+/** Team logo on a white tile (so dark and white-background logos read in both themes).
+ *  Falls back to a colored abbreviation badge for unknown teams. Decorative: the team is always named nearby. */
+export function TeamBadge({ abbr, size = 32, className = "", league = "nba", color, logoId }: {
+  abbr: string; size?: number; className?: string; league?: "nba" | "nfl" | "soccer";
+  /** Soccer: badge color (CSS) and the ESPN team id used for an optional logo file in public/logos/soccer/. */
+  color?: string; logoId?: number;
+}) {
+  if (league === "soccer" && logoId !== undefined && SOCCER_LOGOS.has(logoId)) {
+    return (
+      <span aria-hidden className={`inline-flex shrink-0 items-center justify-center rounded-lg bg-white ring-1 ring-black/5 ${className}`}
+        style={{ width: size, height: size, padding: Math.max(2, Math.round(size * 0.1)) }}>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={`/logos/soccer/${logoId}.webp`} alt="" width={size} height={size} loading="lazy" decoding="async" className="h-full w-full object-contain" />
+      </span>
+    );
+  }
+  if (league !== "soccer" && (league === "nfl" ? abbr in NFL_COLORS : hasTeamLogo(abbr))) {
+    return (
+      <span aria-hidden className={`inline-flex shrink-0 items-center justify-center rounded-lg bg-white ring-1 ring-black/5 ${className}`}
+        style={{ width: size, height: size, padding: Math.max(2, Math.round(size * 0.1)) }}>
+        {/* eslint-disable-next-line @next/next/no-img-element -- pre-sized 256px WebP in public/logos/nba, cached by the service worker */}
+        <img src={`/logos/${league}/${abbr}.webp`} alt="" width={size} height={size} loading="lazy" decoding="async" draggable={false}
+          className="h-full w-full object-contain" />
+      </span>
+    );
+  }
   return (
     <span
       aria-hidden
       className={`inline-flex shrink-0 items-center justify-center rounded-lg font-bold tracking-tight text-white ${className}`}
-      style={{ width: size, height: size, background: teamColor(abbr), fontSize: Math.max(9, size * 0.32) }}
+      style={{ width: size, height: size, background: color ?? (league === "nfl" ? (NFL_COLORS[abbr] ?? "#5f6878") : teamColor(abbr)),
+        fontSize: Math.max(9, size * (abbr.length > 2 ? 0.32 : 0.38)) }}
     >
       {abbr}
     </span>
@@ -28,7 +62,7 @@ export function SectionTitle({ children, action }: { children: ReactNode; action
   );
 }
 
-type PillTone = "neutral" | "accent" | "win" | "loss" | "warn";
+export type PillTone = "neutral" | "accent" | "win" | "loss" | "warn";
 const TONES: Record<PillTone, string> = {
   neutral: "bg-surface-2 text-muted",
   accent: "bg-accent-soft text-accent",
@@ -45,49 +79,8 @@ export function Pill({ children, tone = "neutral", className = "" }: { children:
   );
 }
 
-export function StatusPill({ status }: { status: string }) {
-  const map: Record<string, [string, PillTone]> = {
-    final: ["Final", "neutral"], scheduled: ["Upcoming", "accent"], live: ["Live", "loss"],
-    postponed: ["Postponed", "warn"], canceled: ["Canceled", "warn"], unknown: ["Awaiting result", "warn"],
-  };
-  const [label, tone] = map[status] ?? [status, "neutral"];
-  return <Pill tone={tone}>{label}</Pill>;
-}
 
-/** Two-segment probability bar. Widths encode probability; text labels carry the same info. */
-export function ProbBar({ home, homeAbbr, awayAbbr, height = 6 }: { home: number; homeAbbr: string; awayAbbr: string; height?: number }) {
-  const h = Math.round(home * 1000) / 10;
-  return (
-    <div
-      role="img"
-      aria-label={`${awayAbbr} ${(100 - h).toFixed(0)}%, ${homeAbbr} ${h.toFixed(0)}%`}
-      className="flex w-full overflow-hidden rounded-full bg-surface-3"
-      style={{ height }}
-    >
-      <div style={{ width: `${100 - h}%`, background: home < 0.5 ? "var(--accent)" : "var(--text-faint)", opacity: home < 0.5 ? 1 : 0.4 }} />
-      <div className="w-[2px] bg-surface" />
-      <div style={{ width: `${h}%`, background: home >= 0.5 ? "var(--accent)" : "var(--text-faint)", opacity: home >= 0.5 ? 1 : 0.4 }} />
-    </div>
-  );
-}
 
-/** Semi-circular "% chance" gauge. */
-export function Gauge({ p, label = "chance", size = 92 }: { p: number; label?: string; size?: number }) {
-  const r = 40, c = Math.PI * r, val = Math.max(0, Math.min(1, p));
-  return (
-    <div className="relative" style={{ width: size, height: size * 0.62 }} role="img" aria-label={`${Math.round(val * 100)}% ${label}`}>
-      <svg viewBox="0 0 100 60" width={size} height={size * 0.6}>
-        <path d="M10 55 A40 40 0 0 1 90 55" fill="none" stroke="var(--surface-3)" strokeWidth="9" strokeLinecap="round" />
-        <path d="M10 55 A40 40 0 0 1 90 55" fill="none" stroke="var(--accent)" strokeWidth="9" strokeLinecap="round"
-          strokeDasharray={`${c * val} ${c}`} />
-      </svg>
-      <div className="absolute inset-x-0 bottom-0 text-center leading-none">
-        <div className="tabular text-lg font-bold">{Math.round(val * 100)}%</div>
-        <div className="text-[10px] text-muted">{label}</div>
-      </div>
-    </div>
-  );
-}
 
 export function EmptyState({ title, children }: { title: string; children?: ReactNode }) {
   return (
@@ -102,18 +95,6 @@ export function Skeleton({ className = "" }: { className?: string }) {
   return <div className={`animate-pulse rounded-lg bg-surface-2 ${className}`} />;
 }
 
-export function Breadcrumbs({ items }: { items: { href?: string; label: string }[] }) {
-  return (
-    <nav aria-label="Breadcrumb" className="mb-3 flex flex-wrap items-center gap-1.5 text-xs text-muted">
-      {items.map((it, i) => (
-        <span key={i} className="flex items-center gap-1.5">
-          {i > 0 && <span className="text-faint">›</span>}
-          {it.href ? <Link href={it.href} className="hover:text-ink">{it.label}</Link> : <span>{it.label}</span>}
-        </span>
-      ))}
-    </nav>
-  );
-}
 
 export function StatTile({ label, value, sub }: { label: string; value: ReactNode; sub?: ReactNode }) {
   return (
@@ -125,15 +106,4 @@ export function StatTile({ label, value, sub }: { label: string; value: ReactNod
   );
 }
 
-export function FormChips({ results }: { results: { result: "W" | "L"; opponent: string; home: boolean }[] }) {
-  return (
-    <div className="flex gap-1">
-      {[...results].reverse().map((r, i) => (
-        <span key={i} title={`${r.result} ${r.home ? "vs" : "@"} ${r.opponent}`}
-          className={`inline-flex h-6 w-6 items-center justify-center rounded-md text-[11px] font-bold ${r.result === "W" ? "bg-win-soft text-win" : "bg-loss-soft text-loss"}`}>
-          {r.result}
-        </span>
-      ))}
-    </div>
-  );
-}
+

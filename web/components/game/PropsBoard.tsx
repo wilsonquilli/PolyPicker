@@ -5,6 +5,8 @@ import { useMemo, useState } from "react";
 
 import { teamColor } from "@/lib/teams";
 import type { PlayerForecast, ThresholdRow } from "@/lib/types";
+import { useT } from "@/components/i18n";
+import { keyed } from "@/lib/i18n";
 
 type Stat = "points" | "assists" | "rebounds";
 
@@ -21,11 +23,12 @@ export function PropsBoard({ players, teams, excluded }: {
   teams: { team_id: number; abbreviation: string }[];
   excluded: { player_id: number; full_name: string | null; reason: string; market: string }[];
 }) {
+  const t = useT();
   const [stat, setStat] = useState<Stat>("points");
   const [team, setTeam] = useState<number | "all">("all");
   const [q, setQ] = useState("");
   const [open, setOpen] = useState<number | null>(null);
-  const abbr = (tid?: number) => teams.find((t) => t.team_id === tid)?.abbreviation ?? "";
+  const abbr = (tid?: number) => teams.find((tm) => tm.team_id === tid)?.abbreviation ?? "";
 
   const rows = useMemo(() => players
     .filter((p) => p.markets[stat]?.expected !== undefined)
@@ -37,26 +40,26 @@ export function PropsBoard({ players, teams, excluded }: {
   return (
     <div>
       <div className="mb-3 flex flex-wrap items-center gap-2">
-        <div className="flex gap-1 rounded-xl bg-surface-2 p-1 text-sm font-medium" role="tablist" aria-label="Stat">
+        <div className="flex gap-1 rounded-xl bg-surface-2 p-1 text-sm font-medium" role="tablist" aria-label={t("Stat")}>
           {(["points", "assists", "rebounds"] as Stat[]).map((s) => (
             <button key={s} role="tab" aria-selected={stat === s} onClick={() => setStat(s)}
               className={`flex items-center gap-1 rounded-lg px-3 py-1.5 capitalize ${stat === s ? "bg-surface text-ink shadow-card" : "text-muted"}`}>
-              {s}{s === "rebounds" && <span className="rounded bg-warn-soft px-1 text-[10px] font-semibold text-warn">Beta</span>}
+              {t(s)}{s === "rebounds" && <span className="rounded bg-warn-soft px-1 text-[10px] font-semibold text-warn">{t("Beta")}</span>}
             </button>
           ))}
         </div>
         <div className="flex gap-1 rounded-xl bg-surface-2 p-1 text-sm font-medium">
-          {[{ id: "all" as const, label: "Both" }, ...teams.map((t) => ({ id: t.team_id, label: t.abbreviation }))].map((t) => (
-            <button key={String(t.id)} onClick={() => setTeam(t.id)} aria-pressed={team === t.id}
-              className={`rounded-lg px-3 py-1.5 ${team === t.id ? "bg-surface text-ink shadow-card" : "text-muted"}`}>{t.label}</button>
+          {[{ id: "all" as const, label: t("Both") }, ...teams.map((tm) => ({ id: tm.team_id, label: tm.abbreviation }))].map((tm) => (
+            <button key={String(tm.id)} onClick={() => setTeam(tm.id)} aria-pressed={team === tm.id}
+              className={`rounded-lg px-3 py-1.5 ${team === tm.id ? "bg-surface text-ink shadow-card" : "text-muted"}`}>{tm.label}</button>
           ))}
         </div>
-        <input type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter players" aria-label="Filter players"
+        <input type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder={t("Filter players")} aria-label={t("Filter players")}
           className="h-9 min-w-[160px] flex-1 rounded-xl border border-line bg-surface-2 px-3 text-sm outline-none focus:border-accent/50" />
       </div>
 
       {rows.length === 0 ? (
-        <p className="rounded-xl border border-dashed border-line px-4 py-8 text-center text-sm text-muted">No player forecasts match.</p>
+        <p className="rounded-xl border border-dashed border-line px-4 py-8 text-center text-sm text-muted">{t("No player forecasts match.")}</p>
       ) : (
         <ul className="divide-y divide-line overflow-hidden rounded-2xl border border-line">
           {rows.map((p) => {
@@ -76,32 +79,32 @@ export function PropsBoard({ players, teams, excluded }: {
                       <span className="block truncate text-sm font-semibold">{p.full_name}</span>
                       <span className="flex items-center gap-1.5 text-[11px] text-muted">
                         {abbr(p.team_id)}{p.position ? ` · ${p.position}` : ""}
-                        {av && <span className={`rounded px-1 font-semibold ${av.cls}`} title={p.availability?.reason ?? undefined}>{av.label}</span>}
+                        {av && <span className={`rounded px-1 font-semibold ${av.cls}`} title={p.availability?.reason ? t(p.availability.reason) : undefined}>{t(av.label)}</span>}
                       </span>
                     </span>
                   </button>
                   <div className="text-right">
                     <div className="tabular text-lg font-bold">{m.expected?.toFixed(1)}</div>
-                    <div className="text-[10px] uppercase tracking-wide text-muted">expected</div>
+                    <div className="text-[10px] uppercase tracking-wide text-muted">{t("expected")}</div>
                   </div>
                   <div className="no-scrollbar flex w-full gap-1.5 overflow-x-auto sm:w-auto">
-                    {m.thresholds_available ? m.thresholds.map((t) => <Chip key={`${t.kind}${t.threshold}`} t={t} />)
-                      : <span className="text-xs text-muted">Thresholds not published (calibration gate)</span>}
+                    {m.thresholds_available ? m.thresholds.map((tm) => <Chip key={`${tm.kind}${tm.threshold}`} row={tm} />)
+                      : <span className="text-xs text-muted">{t("Thresholds not published (calibration gate)")}</span>}
                   </div>
                 </div>
                 {expanded && (
                   <div className="grid gap-3 border-t border-line bg-surface-2/50 px-4 py-3 text-sm sm:grid-cols-2">
                     <div>
-                      <div className="mb-1 text-xs font-semibold text-muted">What the forecast is based on</div>
+                      <div className="mb-1 text-xs font-semibold text-muted">{t("What the forecast is based on")}</div>
                       <ul className="list-disc space-y-0.5 pl-4 text-xs">
-                        {m.explanation?.map((e) => <li key={e}>{e}</li>)}
+                        {m.explanation?.map((e) => <li key={e}>{t(e)}</li>)}
                       </ul>
                     </div>
                     <div className="text-xs">
-                      <div className="mb-1 font-semibold text-muted">Availability</div>
-                      <p>{p.availability?.reason ?? "Played in the team’s last game."}</p>
-                      <p className="mt-1 text-muted">{p.availability?.source}</p>
-                      <Link href={`/players/${p.player_id}`} className="mt-2 inline-block font-semibold text-accent hover:underline">Game log →</Link>
+                      <div className="mb-1 font-semibold text-muted">{t("Availability")}</div>
+                      <p>{t(p.availability?.reason ?? "Played in the team’s last game.")}</p>
+                      {p.availability?.source && <p className="mt-1 text-muted">{t(p.availability.source)}</p>}
+                      <Link href={`/nba/players/${p.player_id}`} className="mt-2 inline-block font-semibold text-accent hover:underline">{t("Game log →")}</Link>
                     </div>
                   </div>
                 )}
@@ -112,22 +115,23 @@ export function PropsBoard({ players, teams, excluded }: {
       )}
       {excludedNow.length > 0 && (
         <p className="mt-3 text-xs text-muted">
-          <b>No forecast:</b> {excludedNow.map((e) => `${e.full_name} (${e.reason.replace(/^No forecast: /, "")})`).join("; ")}
+          <b>{t("No forecast:")}</b> {excludedNow.map((e) => `${e.full_name} (${t(e.reason.replace(/^No forecast: /, ""))})`).join("; ")}
         </p>
       )}
     </div>
   );
 }
 
-function Chip({ t }: { t: ThresholdRow }) {
-  const o = t.outcome;
+function Chip({ row }: { row: ThresholdRow }) {
+  const t = useT();
+  const o = row.outcome;
   const tone = o?.state === "final" ? (o.result === "hit" ? "ring-2 ring-win" : o.result === "miss" ? "opacity-60" : "") : "";
-  const short = t.kind === "at_least" ? `${t.threshold}+` : `o${t.threshold}`;
+  const short = row.kind === "at_least" ? `${row.threshold}+` : `o${row.threshold}`;
   return (
-    <span title={`${t.label}: ${(t.probability * 100).toFixed(1)}%${o?.state === "final" ? ` · result: ${o.result}` : ""}`}
-      className={`flex min-w-[58px] shrink-0 flex-col items-center rounded-lg border border-line px-2 py-1 ${t.kind === "over" ? "bg-accent-soft" : "bg-surface"} ${tone}`}>
+    <span title={`${t(row.label)}: ${(row.probability * 100).toFixed(1)}%${o?.state === "final" ? ` · ${t("result")}: ${keyed(t, `result:${o.result}`, o.result ?? "")}` : ""}`}
+      className={`flex min-w-[58px] shrink-0 flex-col items-center rounded-lg border border-line px-2 py-1 ${row.kind === "over" ? "bg-accent-soft" : "bg-surface"} ${tone}`}>
       <span className="text-[10px] font-medium text-muted">{short}</span>
-      <span className="tabular text-sm font-bold">{Math.round(t.probability * 100)}%</span>
+      <span className="tabular text-sm font-bold">{Math.round(row.probability * 100)}%</span>
     </span>
   );
 }

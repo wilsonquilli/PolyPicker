@@ -102,10 +102,41 @@ body {
   outline-offset: 2px;
   border-radius: 6px;
 }
+/* Inputs that fill a panel which already shows focus (the search palette) skip the ring. */
+.no-focus-ring:focus-visible { outline: none; }
+
+/* iOS Safari zooms the page when a focused field's text is under 16px (and the installed app
+   doesn't zoom back out). Keep form fields at 16px on touch screens. */
+@media (pointer: coarse) {
+  input, select, textarea {
+    font-size: 16px;
+  }
+}
 
 /* Installed-app (home screen) polish */
 @media (display-mode: standalone) {
   html, body {
     overscroll-behavior-y: none;
   }
+}
+
+/* Page changes crossfade quickly (React <ViewTransition default="page-fade"> around the page content in the layout).
+   The header and tab bar stay put. Off for people who prefer reduced motion. */
+::view-transition-old(.page-fade) { animation: 120ms ease-out both pp-fade-out; }
+::view-transition-new(.page-fade) { animation: 180ms ease-out 40ms both pp-fade-in; }
+@keyframes pp-fade-out { to { opacity: 0; } }
+@keyframes pp-fade-in { from { opacity: 0; transform: translateY(4px); } }
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-old(*), ::view-transition-new(*), ::view-transition-group(*) { animation: none !important; }
+}
+
+/* In-page jumps (home page "at a glance" strip): smooth, and clear of the sticky header. */
+html { scroll-behavior: smooth; }
+h1[id], h2[id] { scroll-margin-top: 8.5rem; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+
+/* Touch screens: cards give a little press feedback. */
+@media (hover: none) {
+  a.shadow-card { transition: transform 120ms ease; }
+  a.shadow-card:active { transform: scale(0.985); }
 }

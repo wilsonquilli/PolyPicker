@@ -3,6 +3,7 @@
 import { useState } from "react";
 
 import type { Dist } from "@/lib/types";
+import { useT } from "@/components/i18n";
 
 type Mode = "margin" | "total";
 
@@ -17,6 +18,7 @@ function normPdf(x: number, m: number, s: number) {
 export function DistributionChart({ margin, total, homeAbbr, awayAbbr, actualMargin, actualTotal }: {
   margin?: Dist; total?: Dist; homeAbbr: string; awayAbbr: string; actualMargin?: number | null; actualTotal?: number | null;
 }) {
+  const t = useT();
   const [mode, setMode] = useState<Mode>("margin");
   const d = mode === "margin" ? margin : total;
   if (!d) return null;
@@ -42,33 +44,33 @@ export function DistributionChart({ margin, total, homeAbbr, awayAbbr, actualMar
           {(["margin", "total"] as Mode[]).map((m) => (
             <button key={m} role="tab" aria-selected={mode === m} onClick={() => setMode(m)}
               className={`rounded-md px-3 py-1 ${mode === m ? "bg-surface text-ink shadow-card" : "text-muted"}`}>
-              {m === "margin" ? "Final margin" : "Total points"}
+              {m === "margin" ? t("Final margin") : t("Total points")}
             </button>
           ))}
         </div>
         <div className="flex items-center gap-3 text-xs text-muted">
           {mode === "margin" ? (
             <>
-              <Legend color="var(--text-muted)" label={`${awayAbbr} wins ${(100 - pRight * 100).toFixed(0)}%`} faded />
-              <Legend color="var(--accent)" label={`${homeAbbr} wins ${(pRight * 100).toFixed(0)}%`} />
+              <Legend color="var(--text-muted)" label={t("{team} wins {p}%", { team: awayAbbr, p: (100 - pRight * 100).toFixed(0) })} faded />
+              <Legend color="var(--accent)" label={t("{team} wins {p}%", { team: homeAbbr, p: (pRight * 100).toFixed(0) })} />
             </>
           ) : (
             <>
-              <Legend color="var(--text-muted)" label={`Under ${split} · ${(100 - pRight * 100).toFixed(0)}%`} faded />
-              <Legend color="var(--accent)" label={`Over ${split} · ${(pRight * 100).toFixed(0)}%`} />
+              <Legend color="var(--text-muted)" label={`${t("Under")} ${split} · ${(100 - pRight * 100).toFixed(0)}%`} faded />
+              <Legend color="var(--accent)" label={`${t("Over")} ${split} · ${(pRight * 100).toFixed(0)}%`} />
             </>
           )}
         </div>
       </div>
       <svg viewBox={`0 0 ${W} ${H}`} className="h-auto w-full" role="img"
         aria-label={mode === "margin"
-          ? `Projected ${homeAbbr} margin ${d.mean.toFixed(1)} points; ${homeAbbr} win probability ${(pRight * 100).toFixed(0)}%`
-          : `Projected total ${d.mean.toFixed(1)} points`}>
-        {ticks.map((t) => (
-          <g key={t}>
-            <line x1={X(t)} x2={X(t)} y1={padT} y2={H - padB} stroke="var(--border)" strokeDasharray="2 4" />
-            <text x={X(t)} y={H - 10} textAnchor="middle" fontSize="11" fill="var(--text-faint)">
-              {mode === "margin" ? (t > 0 ? `${homeAbbr} +${t}` : t < 0 ? `${awayAbbr} +${-t}` : "0") : t}
+          ? t("Projected {team} margin {m} points; {team} win probability {p}%", { team: homeAbbr, m: d.mean.toFixed(1), p: (pRight * 100).toFixed(0) })
+          : t("Projected total {m} points", { m: d.mean.toFixed(1) })}>
+        {ticks.map((tm) => (
+          <g key={tm}>
+            <line x1={X(tm)} x2={X(tm)} y1={padT} y2={H - padB} stroke="var(--border)" strokeDasharray="2 4" />
+            <text x={X(tm)} y={H - 10} textAnchor="middle" fontSize="11" fill="var(--text-faint)">
+              {mode === "margin" ? (tm > 0 ? `${homeAbbr} +${tm}` : tm < 0 ? `${awayAbbr} +${-tm}` : "0") : tm}
             </text>
           </g>
         ))}
@@ -78,19 +80,19 @@ export function DistributionChart({ margin, total, homeAbbr, awayAbbr, actualMar
         <line x1={X(split)} x2={X(split)} y1={padT - 4} y2={H - padB} stroke="var(--text)" strokeWidth="1.2" />
         <line x1={X(d.mean)} x2={X(d.mean)} y1={Y(ymax)} y2={H - padB} stroke="var(--accent)" strokeDasharray="4 3" />
         <text x={X(d.mean)} y={padT - 4} textAnchor="middle" fontSize="11" fontWeight="600" fill="var(--accent)">
-          proj. {mode === "margin" ? `${d.mean > 0 ? homeAbbr : awayAbbr} by ${Math.abs(d.mean).toFixed(1)}` : d.mean.toFixed(1)}
+          {t("proj.")} {mode === "margin" ? t("{team} by {n}", { team: d.mean > 0 ? homeAbbr : awayAbbr, n: Math.abs(d.mean).toFixed(1) }) : d.mean.toFixed(1)}
         </text>
         {actual !== null && actual !== undefined && actual >= lo && actual <= hi && (
           <g>
             <circle cx={X(actual)} cy={H - padB} r="5" fill="var(--text)" />
-            <text x={X(actual)} y={H - padB - 10} textAnchor="middle" fontSize="11" fontWeight="700" fill="var(--text)">actual</text>
+            <text x={X(actual)} y={H - padB - 10} textAnchor="middle" fontSize="11" fontWeight="700" fill="var(--text)">{t("actual")}</text>
           </g>
         )}
       </svg>
       <p className="mt-1 text-xs text-muted">
         {mode === "margin"
-          ? "Model distribution of the final margin. The shaded area on each side of 0 is that team's win probability."
-          : `Model distribution of combined points. Shaded areas are the over/under probabilities for ${split}.`}
+          ? t("Model distribution of the final margin. The shaded area on each side of 0 is that team's win probability.")
+          : t("Model distribution of combined points. Shaded areas are the over/under probabilities for {line}.", { line: split })}
       </p>
     </div>
   );

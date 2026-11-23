@@ -8,7 +8,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import Connection
 
-from polypicker.api.deps import get_conn, q, q1
+from polypicker.api.deps import cached, get_conn, q, q1
 from polypicker.api.queries import freshness, prediction_meta, teams_by_id
 from polypicker.domain.markets import Market, ThresholdKind, label, round_probability_pair
 from polypicker.ml.distributions import count_threshold, dispersion_at, normal_over, spread_cover
@@ -72,6 +72,24 @@ def game_predictions(game_id: int, category: list[Category] | None = Query(None)
     game_markets, players, excluded, model_versions = _shape(rows, game, teams)
     for r in rows:
         model_versions[r["market"]] = r["model_version"]
+    odds = q1(conn, """SELECT provider, p_home, home_ml, away_ml, spread_home, total, is_closing, fetched_at
+                       FROM nba_odds WHERE game_id = :g""", g=game_id)
+    pmk = q1(conn, """SELECT slug, event_slug, p_home_live, p_home_pregame, pregame_at, volume_usd, closed, fetched_at
+                      FROM polymarket_nba WHERE game_id = :g""", g=game_id)
+    if pmk and (pmk["p_home_live"] is not None or pmk["p_home_pregame"] is not None):
+        started = game["status"] != "scheduled"
+        p = pmk["p_home_pregame"] if (started and pmk["p_home_pregame"] is not None) else pmk["p_home_live"]
+        if p is not None:
+            game_markets["polymarket"] = {
+                "p_home": round(float(p), 4), "price_type": "pregame" if started else "live",
+                "volume_usd": pmk["volume_usd"], "fetched_at": pmk["fetched_at"],
+                "url": f"https://polymarket.com/event/{pmk['event_slug'] or pmk['slug']}",
+                "note": "Polymarket price for this game's winner market (crowd-traded probability). "
+                        "Shown for comparison; it is not a PolyPicker forecast."}
+    if odds and odds["p_home"] is not None:
+        game_markets["sportsbook"] = {**odds, "p_home": round(float(odds["p_home"]), 4),
+                                      "note": "Sportsbook line from ESPN's odds feed, bookmaker margin removed. "
+                                              "Shown for comparison; it is not a PolyPicker forecast."}
     ids = list({p["player_id"] for p in players} | {e["player_id"] for e in excluded})
     if ids:
         names = {r["player_id"]: r for r in q(conn, """SELECT player_id, full_name, position FROM players
@@ -87,7 +105,10 @@ def game_predictions(game_id: int, category: list[Category] | None = Query(None)
         "notes": {
             "kind": "Backtest forecasts were regenerated after the fact using only data available before "
                     "each game; they were not published live." if rev["kind"] == "backtest" else None,
-            "availability": "Player availability is inferred from recent box scores; no injury feed is used.",
+            "availability": "Player availability comes from ESPN's injury report when a player is listed, otherwise "
+                            "it is inferred from recent box scores. Backtests use the players who actually played.",
+            "market": "When a game has a betting line, the winner forecast also uses the sportsbook spread/total and "
+                      "Polymarket's price. Backtests use closing lines; live forecasts use the line at publish time.",
             "thresholds": "'20+' means at least 20. 'Over 20.5' means 21 or more. An integer over/under or "
                           "spread line can push (exact landing); pushes are reported separately.",
         }},
@@ -112,6 +133,8 @@ def _shape(rows: list[dict], game: dict, teams: dict) -> tuple[dict, list, list,
                              "probability": r["probability"], "outcome": _outcome(r)}
             if r["side"] == "home" and r["details"]:
                 ml["factors"] = r["details"].get("factors")
+                if r["details"].get("absences"):
+                    ml["absences"] = r["details"]["absences"]
                 dist = r["details"].get("distribution") or {}
                 if dist:  # P(home win) = P(margin > 0) under Normal(mean, sd)
                     ml["distribution"] = {"type": "normal", "mean": dist.get("mu_margin_home"),
@@ -215,12 +238,15 @@ def custom_threshold(game_id: int,
 
 
 @router.get("/predictions/history")
+@cached(ttl=300)
 def prediction_history(
     category: list[Category] | None = Query(None), kind: Kind | None = None,
     state: list[Literal["pending", "final", "void", "unavailable", "unevaluable"]] | None = Query(None),
     date_from: date | None = None, date_to: date | None = None, team: int | None = None,
     player_id: int | None = None, probabilities_only: bool = False,
     favorites_only: bool = Query(False, description="Winner market: only the favored side (one row per game)"),
+    one_per_game: bool = Query(False, description="Only the final forecast (latest revision) per game, and one line "
+                               "per game/player: the favored winner, or the line nearest the projection"),
     limit: int = Query(100, ge=1, le=500), offset: int = Query(0, ge=0),
     conn: Connection = Depends(get_conn),
 ):
@@ -251,20 +277,49 @@ def prediction_history(
                LEFT JOIN players pl ON p.subject_type = 'player' AND pl.player_id = p.subject_id
                LEFT JOIN teams st ON p.subject_type = 'team' AND st.team_id = p.subject_id
                LEFT JOIN prediction_outcomes o ON o.prediction_id = p.id WHERE {w}"""
-    total = q1(conn, f"SELECT count(*) n {base}", **params)["n"]
-    rows = q(conn, f"""
-        SELECT p.id AS prediction_id, p.game_id, g.game_date_et AS game_date, p.kind, p.revision, p.market,
+    cols = """p.id AS prediction_id, p.game_id, g.game_date_et AS game_date, p.kind, p.revision, p.market,
                p.subject_type, p.subject_id, p.side, p.threshold_kind, p.threshold, p.label, p.probability,
                p.push_probability, p.projection, p.published_at, p.data_cutoff_utc,
                coalesce(o.graded_state, 'pending') AS graded_state, o.outcome, o.observed_value, o.brier,
                o.abs_error, o.graded_at, at.abbreviation || ' @ ' || ht.abbreviation AS matchup,
-               g.home_score, g.away_score, coalesce(pl.full_name, st.abbreviation) AS subject_name
-        {base} ORDER BY g.tipoff_utc DESC, p.game_id, p.id LIMIT :lim OFFSET :off""",
+               g.home_score, g.away_score, coalesce(pl.full_name, st.abbreviation) AS subject_name, g.tipoff_utc"""
+    if one_per_game:
+        # A game is re-forecast many times; keep the last revision, then a single headline row per
+        # game (or player): the favored winner, or the line closest to the projection.
+        base = base.replace("WHERE ", """JOIN (SELECT game_id, kind, max(revision) r FROM predictions GROUP BY 1, 2) lr
+                ON lr.game_id = p.game_id AND lr.kind = p.kind AND lr.r = p.revision
+            WHERE ((p.market = 'moneyline' AND (p.probability > 0.5 OR (p.probability = 0.5 AND p.side = 'home')))
+                   OR (p.market <> 'moneyline' AND p.threshold_kind IN ('handicap', 'over'))) AND """, 1)
+        src = f"""(SELECT DISTINCT ON (p.game_id, p.kind, p.market, p.subject_id) {cols} {base}
+                   ORDER BY p.game_id, p.kind, p.market, p.subject_id,
+                            abs(p.threshold + CASE WHEN p.market = 'spread' THEN p.projection ELSE -p.projection END)
+                              NULLS LAST, p.id) x"""
+    else:
+        src = f"(SELECT {cols} {base}) x"
+    total = q1(conn, f"SELECT count(*) n FROM {src}", **params)["n"]
+    rows = q(conn, f"SELECT * FROM {src} ORDER BY tipoff_utc DESC, game_id, prediction_id LIMIT :lim OFFSET :off",
              **params, lim=limit, off=offset)
+    for r in rows:
+        r.pop("tipoff_utc", None)
     return {"data": rows, "meta": prediction_meta(total=total, limit=limit, offset=offset)}
 
 
+@router.get("/markets/polymarket")
+def polymarket_prices(date_from: date | None = None, date_to: date | None = None, conn: Connection = Depends(get_conn)):
+    """Polymarket winner-market prices per NBA game (live price before tip-off, pregame price after)."""
+    rows = q(conn, """
+        SELECT x.game_id, CASE WHEN g.status = 'scheduled' THEN x.p_home_live ELSE coalesce(x.p_home_pregame, x.p_home_live) END p_home,
+               x.volume_usd, coalesce(x.event_slug, x.slug) slug, g.status
+        FROM polymarket_nba x JOIN games g USING (game_id)
+        WHERE g.game_date_et BETWEEN coalesce(:df, current_date - 1) AND coalesce(:dt, current_date + 7)""",
+             df=date_from, dt=date_to)
+    return {"data": [{**r, "p_home": _r(r["p_home"]), "url": f"https://polymarket.com/event/{r['slug']}"}
+                     for r in rows if r["p_home"] is not None],
+            "meta": prediction_meta(extra={"source": "Polymarket (gamma-api.polymarket.com, clob.polymarket.com)"})}
+
+
 @router.get("/models/performance")
+@cached(ttl=300)
 def model_performance(kind: Kind | None = None, season: int | None = None,
                       category: list[Category] | None = Query(None), conn: Connection = Depends(get_conn)):
     """Accuracy, Brier, log loss, calibration and MAE from graded snapshots (FR-09.3, FR-09.4), plus the
@@ -277,7 +332,12 @@ def model_performance(kind: Kind | None = None, season: int | None = None,
     if category:
         where.append("p.market = ANY(:m)"); params["m"] = sum((CATEGORY[c] for c in category), [])
     w = " AND ".join(where)
-    base = f"FROM predictions p JOIN games g USING (game_id) JOIN prediction_outcomes o ON o.prediction_id = p.id WHERE {w}"
+    # Score each game once: its latest revision per kind (the last forecast before tip-off for live).
+    # Restrict the latest-revision scan to the requested kind (backtests are most of the table).
+    latest = f"""JOIN (SELECT game_id, kind, max(revision) r FROM predictions {'WHERE kind = :k' if kind else ''} GROUP BY 1, 2) lr
+                ON lr.game_id = p.game_id AND lr.kind = p.kind AND lr.r = p.revision"""
+    base = f"FROM predictions p {latest} JOIN games g ON g.game_id = p.game_id " \
+           f"JOIN prediction_outcomes o ON o.prediction_id = p.id WHERE {w}"
     states = q(conn, f"SELECT p.market, o.graded_state, count(*) n {base} GROUP BY 1, 2 ORDER BY 1, 2", **params)
     prob = q(conn, f"""
         SELECT p.market, count(*) n, avg(o.brier) brier, avg(o.log_loss) log_loss,
@@ -297,7 +357,8 @@ def model_performance(kind: Kind | None = None, season: int | None = None,
         {base} AND o.graded_state = 'final' AND p.probability IS NOT NULL AND o.outcome IN ('hit','miss')
         GROUP BY 1, 2 ORDER BY 1, 2""", **params)
     active = q(conn, """SELECT id, target, version, algorithm, train_start, train_end, validation_start,
-                               validation_end, metrics, trained_at FROM models WHERE is_active ORDER BY target""")
+                               validation_end, metrics, trained_at FROM models
+                       WHERE is_active AND target NOT LIKE 'nfl_%' AND target NOT LIKE 'soccer_%' ORDER BY target""")
     by_market: dict[str, dict] = {}
     for r in states:
         by_market.setdefault(r["market"], {"graded_states": {}})["graded_states"][r["graded_state"]] = r["n"]
@@ -311,6 +372,56 @@ def model_performance(kind: Kind | None = None, season: int | None = None,
         by_market.setdefault(r["market"], {}).setdefault("calibration", []).append(
             {"bucket": r["bucket"], "n": r["n"], "mean_predicted": _r(r["mean_predicted"]),
              "observed_rate": _r(r["observed_rate"])})
+    def versus(join_sql: str) -> dict | None:
+        return q1(conn, f"""
+        WITH ml AS (
+            SELECT DISTINCT ON (p.game_id, p.kind) p.game_id, p.probability ph, (g.home_score > g.away_score) hw
+            {base} AND p.market = 'moneyline' AND p.side = 'home' AND o.graded_state = 'final'
+            ORDER BY p.game_id, p.kind, p.revision DESC),
+        j AS ({join_sql})
+        SELECT count(*) n,
+               avg(((ph > 0.5) = hw)::int) model_acc, avg(((pm > 0.5) = hw)::int) market_acc,
+               avg(-ln(greatest(CASE WHEN hw THEN ph ELSE 1 - ph END, 1e-9))) model_ll,
+               avg(-ln(greatest(CASE WHEN hw THEN pm ELSE 1 - pm END, 1e-9))) market_ll,
+               avg(power(ph - hw::int, 2)) model_brier, avg(power(pm - hw::int, 2)) market_brier,
+               count(*) FILTER (WHERE (ph > 0.5) <> (pm > 0.5)) disagree_n,
+               avg(((ph > 0.5) = hw)::int) FILTER (WHERE (ph > 0.5) <> (pm > 0.5)) disagree_model_right
+        FROM j""", **params)
+
+    def shape(r: dict | None, source: str) -> dict | None:
+        if not r or not r["n"]:
+            return None
+        return {"n": r["n"], "source": source,
+                "model": {"accuracy": _r(r["model_acc"]), "log_loss": _r(r["model_ll"]), "brier": _r(r["model_brier"])},
+                "market": {"accuracy": _r(r["market_acc"]), "log_loss": _r(r["market_ll"]), "brier": _r(r["market_brier"])},
+                "disagreements": {"n": r["disagree_n"], "model_right": _r(r["disagree_model_right"])}}
+
+    pm = shape(versus("""SELECT ml.*, x.p_home_pregame pm FROM ml JOIN polymarket_nba x USING (game_id)
+                         WHERE x.p_home_pregame IS NOT NULL"""),
+               "Polymarket moneyline market, last traded price before tip-off")
+    if pm:
+        by_market.setdefault("moneyline", {})["vs_polymarket"] = pm
+    market = q1(conn, f"""
+        WITH ml AS (
+            SELECT DISTINCT ON (p.game_id, p.kind) p.game_id, p.probability ph, (g.home_score > g.away_score) hw
+            {base} AND p.market = 'moneyline' AND p.side = 'home' AND o.graded_state = 'final'
+            ORDER BY p.game_id, p.kind, p.revision DESC),
+        j AS (SELECT ml.*, od.p_home pm FROM ml JOIN nba_odds od USING (game_id)
+              WHERE od.p_home IS NOT NULL AND od.is_closing)
+        SELECT count(*) n,
+               avg(((ph > 0.5) = hw)::int) model_acc, avg(((pm > 0.5) = hw)::int) market_acc,
+               avg(-ln(greatest(CASE WHEN hw THEN ph ELSE 1 - ph END, 1e-9))) model_ll,
+               avg(-ln(greatest(CASE WHEN hw THEN pm ELSE 1 - pm END, 1e-9))) market_ll,
+               avg(power(ph - hw::int, 2)) model_brier, avg(power(pm - hw::int, 2)) market_brier,
+               count(*) FILTER (WHERE (ph > 0.5) <> (pm > 0.5)) disagree_n,
+               avg(((ph > 0.5) = hw)::int) FILTER (WHERE (ph > 0.5) <> (pm > 0.5)) disagree_model_right
+        FROM j""", **params)
+    if market and market["n"]:
+        by_market.setdefault("moneyline", {})["vs_market"] = {
+            "n": market["n"], "source": "Closing sportsbook moneyline (ESPN odds feed), bookmaker margin removed",
+            "model": {"accuracy": _r(market["model_acc"]), "log_loss": _r(market["model_ll"]), "brier": _r(market["model_brier"])},
+            "market": {"accuracy": _r(market["market_acc"]), "log_loss": _r(market["market_ll"]), "brier": _r(market["market_brier"])},
+            "disagreements": {"n": market["disagree_n"], "model_right": _r(market["disagree_model_right"])}}
     if winner and winner["n"]:
         by_market.setdefault("moneyline", {})["winner_accuracy"] = {"n": winner["n"], "value": _r(winner["accuracy"])}
     return {"data": {"filters": {"kind": kind, "season": season, "category": category}, "markets": by_market,
@@ -321,3 +432,57 @@ def model_performance(kind: Kind | None = None, season: int | None = None,
 
 def _r(v, n: int = 4):
     return None if v is None else round(float(v), n)
+
+
+# ---------------------------------------------------------------- value finder
+
+def _american(dec: float | None) -> str | None:
+    if not dec or dec <= 1:
+        return None
+    return f"+{round((dec - 1) * 100)}" if dec >= 2 else f"{round(-100 / (dec - 1))}"
+
+
+@router.get("/value/nba")
+def value_picks(conn: Connection = Depends(get_conn)):
+    """Open value bets for upcoming NBA games: our probability vs the best price on offer."""
+    rows = q(conn, """
+        SELECT v.id, v.game_id, v.market, v.player_id, pl.full_name AS player_name, v.side, v.line,
+               v.last_our_p AS our_p, v.last_price_dec AS price_dec, v.last_book AS book, v.last_ev AS ev, v.kelly,
+               v.price_dec AS flagged_price_dec, v.flagged_at, v.last_seen_at, g.tipoff_utc,
+               h.abbreviation home, a.abbreviation away, h.team_id home_id, a.team_id away_id, pt.abbreviation player_team
+        FROM value_picks v JOIN games g USING (game_id)
+        JOIN teams h ON h.team_id = g.home_team_id JOIN teams a ON a.team_id = g.away_team_id
+        LEFT JOIN players pl ON pl.player_id = v.player_id
+        LEFT JOIN LATERAL (SELECT t.abbreviation FROM player_game_stats p JOIN teams t ON t.team_id = p.team_id
+                           JOIN games pg ON pg.game_id = p.game_id
+                           WHERE p.player_id = v.player_id ORDER BY pg.tipoff_utc DESC LIMIT 1) pt ON TRUE
+        WHERE g.status = 'scheduled' AND g.tipoff_utc > now() AND v.graded_at IS NULL
+          AND v.last_seen_at > now() - interval '12 hours'
+        ORDER BY v.last_ev DESC""")
+    for r in rows:
+        r["price_american"] = _american(r["price_dec"])
+    return {"data": rows, "meta": prediction_meta(extra={
+        "note": "Informational only. Expected value uses PolyPicker's probability (props: blended 30% model / 70% market) "
+                "against the best price we found; stakes are quarter-Kelly as a share of bankroll."})}
+
+
+@router.get("/value/nba/record")
+@cached(ttl=300)
+def value_record(conn: Connection = Depends(get_conn)):
+    """Track record: live picks (graded) by EV threshold, closing-line value, plus stored backtests."""
+    live = q(conn, """
+        SELECT CASE WHEN market = 'moneyline' THEN 'winners' ELSE 'props' END AS market, count(*) n,
+               avg((result = 'win')::int) FILTER (WHERE result IN ('win','loss')) win_rate,
+               sum(profit) units, avg(profit) roi, avg(clv_prob) avg_clv, avg(beat_close::int) beat_close_rate
+        FROM value_picks WHERE graded_at IS NOT NULL AND result <> 'void' GROUP BY 1""")
+    recent = q(conn, """
+        SELECT v.game_id, v.market, pl.full_name player_name, v.side, v.line, v.price_dec, v.book, v.ev, v.result,
+               v.profit, v.clv_prob, v.beat_close, g.game_date_et, h.abbreviation home, a.abbreviation away
+        FROM value_picks v JOIN games g USING (game_id) JOIN teams h ON h.team_id = g.home_team_id
+        JOIN teams a ON a.team_id = g.away_team_id LEFT JOIN players pl ON pl.player_id = v.player_id
+        WHERE v.graded_at IS NOT NULL ORDER BY v.graded_at DESC, v.ev DESC LIMIT 30""")
+    backtests = q(conn, """SELECT DISTINCT ON (market, season) market, season, created_at, report
+                           FROM value_backtests ORDER BY market, season, created_at DESC""")
+    for r in recent:
+        r["price_american"] = _american(r["price_dec"])
+    return {"data": {"live": live, "recent": recent, "backtests": backtests}, "meta": prediction_meta()}

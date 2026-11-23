@@ -1,14 +1,16 @@
+import { getT } from "@/lib/i18n/server";
 // Small server-rendered SVG charts.
 
 /** Bars above/below zero, e.g. point margin per game (oldest -> newest). */
-export function MarginBars({ values, labels, height = 120 }: { values: number[]; labels?: string[]; height?: number }) {
+export async function MarginBars({ values, labels, height = 120 }: { values: number[]; labels?: string[]; height?: number }) {
+  const t = await getT();
   if (!values.length) return null;
   const W = Math.max(values.length * 22, 200), H = height, mid = H / 2;
   const max = Math.max(...values.map(Math.abs), 10);
   const bw = W / values.length;
   return (
     <svg viewBox={`0 0 ${W} ${H}`} className="h-auto w-full" role="img"
-      aria-label={`Point margins: ${values.map((v) => (v > 0 ? `+${v}` : v)).join(", ")}`}>
+      aria-label={`${t("Point margins")}: ${values.map((v) => (v > 0 ? `+${v}` : v)).join(", ")}`}>
       <line x1="0" x2={W} y1={mid} y2={mid} stroke="var(--border)" />
       {values.map((v, i) => {
         const h = (Math.abs(v) / max) * (mid - 6);
@@ -24,7 +26,8 @@ export function MarginBars({ values, labels, height = 120 }: { values: number[];
 }
 
 /** Bars per game with an average line, e.g. player points (oldest -> newest). Null = did not play. */
-export function StatBars({ values, labels, average, height = 140 }: { values: (number | null)[]; labels: string[]; average?: number | null; height?: number }) {
+export async function StatBars({ values, labels, average, height = 140 }: { values: (number | null)[]; labels: string[]; average?: number | null; height?: number }) {
+  const t = await getT();
   if (!values.length) return null;
   const W = Math.max(values.length * 24, 240), H = height, pad = 16;
   const max = Math.max(...values.map((v) => v ?? 0), average ?? 0, 5);
@@ -32,7 +35,7 @@ export function StatBars({ values, labels, average, height = 140 }: { values: (n
   const Y = (v: number) => H - pad - (v / max) * (H - pad * 2);
   return (
     <svg viewBox={`0 0 ${W} ${H}`} className="h-auto w-full" role="img"
-      aria-label={`Per-game values: ${values.map((v) => v ?? "DNP").join(", ")}`}>
+      aria-label={`${t("Per-game values")}: ${values.map((v) => v ?? t("DNP")).join(", ")}`}>
       <line x1="0" x2={W} y1={H - pad} y2={H - pad} stroke="var(--border)" />
       {values.map((v, i) => v === null ? (
         <text key={i} x={i * bw + bw / 2} y={H - pad - 4} textAnchor="middle" fontSize="8" fill="var(--text-faint)">DNP</text>
@@ -55,19 +58,20 @@ export function StatBars({ values, labels, average, height = 140 }: { values: (n
 }
 
 /** Reliability diagram: predicted probability (x) vs observed frequency (y). */
-export function CalibrationChart({ bins, size = 300 }: { bins: { mean_predicted: number; observed_rate: number; n: number }[]; size?: number }) {
+export async function CalibrationChart({ bins, size = 300 }: { bins: { mean_predicted: number; observed_rate: number; n: number }[]; size?: number }) {
+  const t = await getT();
   const pad = 44, S = size;
   const X = (v: number) => pad + v * (S - pad - 10);
   const Y = (v: number) => S - pad - v * (S - pad - 10);
   const maxN = Math.max(...bins.map((b) => b.n), 1);
   return (
     <svg viewBox={`0 0 ${S} ${S}`} className="h-auto w-full max-w-[360px]" role="img"
-      aria-label={`Calibration: ${bins.map((b) => `predicted ${Math.round(b.mean_predicted * 100)}% observed ${Math.round(b.observed_rate * 100)}%`).join("; ")}`}>
-      {[0, 0.25, 0.5, 0.75, 1].map((t) => (
-        <g key={t}>
-          <line x1={X(0)} x2={X(1)} y1={Y(t)} y2={Y(t)} stroke="var(--border)" strokeDasharray="2 4" />
-          <text x={pad - 6} y={Y(t) + 3} textAnchor="end" fontSize="10" fill="var(--text-faint)">{t * 100}%</text>
-          <text x={X(t)} y={S - pad + 14} textAnchor="middle" fontSize="10" fill="var(--text-faint)">{t * 100}%</text>
+      aria-label={`${t("Calibration")}: ${bins.map((b) => t("predicted {p}% observed {o}%", { p: Math.round(b.mean_predicted * 100), o: Math.round(b.observed_rate * 100) })).join("; ")}`}>
+      {[0, 0.25, 0.5, 0.75, 1].map((tm) => (
+        <g key={tm}>
+          <line x1={X(0)} x2={X(1)} y1={Y(tm)} y2={Y(tm)} stroke="var(--border)" strokeDasharray="2 4" />
+          <text x={pad - 6} y={Y(tm) + 3} textAnchor="end" fontSize="10" fill="var(--text-faint)">{tm * 100}%</text>
+          <text x={X(tm)} y={S - pad + 14} textAnchor="middle" fontSize="10" fill="var(--text-faint)">{tm * 100}%</text>
         </g>
       ))}
       <line x1={X(0)} y1={Y(0)} x2={X(1)} y2={Y(1)} stroke="var(--text-faint)" strokeDasharray="4 4" />
@@ -78,8 +82,8 @@ export function CalibrationChart({ bins, size = 300 }: { bins: { mean_predicted:
           <title>{`Predicted ${(b.mean_predicted * 100).toFixed(0)}% → observed ${(b.observed_rate * 100).toFixed(0)}% (n=${b.n})`}</title>
         </circle>
       ))}
-      <text x={X(0.5)} y={S - 4} textAnchor="middle" fontSize="10" fill="var(--text-muted)">Forecast probability</text>
-      <text x={9} y={Y(0.5)} textAnchor="middle" fontSize="10" fill="var(--text-muted)" transform={`rotate(-90 9 ${Y(0.5)})`}>Observed frequency</text>
+      <text x={X(0.5)} y={S - 4} textAnchor="middle" fontSize="10" fill="var(--text-muted)">{t("Forecast probability")}</text>
+      <text x={9} y={Y(0.5)} textAnchor="middle" fontSize="10" fill="var(--text-muted)" transform={`rotate(-90 9 ${Y(0.5)})`}>{t("Observed frequency")}</text>
     </svg>
   );
 }

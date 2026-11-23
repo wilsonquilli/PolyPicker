@@ -119,7 +119,8 @@ def freshness(conn: Connection) -> dict:
     ing = q1(conn, """SELECT finished_at, source_updated_at FROM ingestion_runs
                       WHERE status = 'succeeded' AND job = 'ingest' ORDER BY finished_at DESC LIMIT 1""")
     pred = q1(conn, """SELECT finished_at, data_cutoff_utc FROM prediction_runs
-                       WHERE status = 'succeeded' AND kind = 'live' ORDER BY finished_at DESC LIMIT 1""")
+                       WHERE status = 'succeeded' AND kind = 'live' AND coalesce(stats->>'league', 'nba') = 'nba'
+                       ORDER BY finished_at DESC LIMIT 1""")
     return {"last_data_sync_utc": ing and ing["finished_at"],
             "source_updated_utc": ing and ing["source_updated_at"],
             "last_live_forecast_run_utc": pred and pred["finished_at"]}

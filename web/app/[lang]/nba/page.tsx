@@ -1,11 +1,11 @@
 import Link from "next/link";
 import { Suspense } from "react";
-
 import { GameCard, GameCardSkeleton } from "@/components/GameCard";
 import { Card, EmptyState, Gauge, Pill, ProbBar, TeamBadge } from "@/components/ui";
 import { api } from "@/lib/api";
 import { addDays, longDate, shortDate, tipoffTime, weekday } from "@/lib/format";
 import type { GameSummary } from "@/lib/types";
+import { getLang, getT } from "@/lib/i18n/server";
 
 type View = "today" | "tomorrow" | "upcoming" | "results";
 type SP = Promise<{ [k: string]: string | string[] | undefined }>;
@@ -19,10 +19,11 @@ export default function Home({ searchParams }: { searchParams: SP }) {
 }
 
 async function Slate({ searchParams }: { searchParams: SP }) {
+  const [t, lang] = await Promise.all([getT(), getLang()]);
   const sp = await searchParams;
   const view = (["today", "tomorrow", "upcoming", "results"].includes(String(sp.view)) ? sp.view : "today") as View;
   const datesRes = await api<{ date: string; games: number; final: number; scheduled: number }[]>("/games/dates");
-  if (!datesRes) throw new Error("Schedule unavailable");
+  if (!datesRes) throw new Error(t("Schedule unavailable"));
   const today = String(datesRes.meta.extra?.today);
   const dates = datesRes.data;
   const date = typeof sp.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(sp.date) ? sp.date
@@ -32,13 +33,13 @@ async function Slate({ searchParams }: { searchParams: SP }) {
   let heading = "";
   if (view === "upcoming" && !sp.date) {
     games = (await api<GameSummary[]>("/games", { date_from: addDays(today, 1), date_to: addDays(today, 7), status: "scheduled", limit: 200 }))?.data ?? [];
-    heading = "Next 7 days";
+    heading = t("Next 7 days");
   } else if (view === "results" && !sp.date) {
     games = ((await api<GameSummary[]>("/games", { date_from: addDays(today, -7), date_to: addDays(today, -1), status: "final", limit: 200 }))?.data ?? []).reverse();
-    heading = "Last 7 days";
+    heading = t("Last 7 days");
   } else {
     games = (await api<GameSummary[]>("/games", { date, limit: 100 }))?.data ?? [];
-    heading = date === today ? `Today · ${longDate(date)}` : date === addDays(today, 1) ? `Tomorrow · ${longDate(date)}` : longDate(date);
+    heading = date === today ? `${t("Today")} · ${longDate(date, lang)}` : date === addDays(today, 1) ? `${t("Tomorrow")} · ${longDate(date, lang)}` : longDate(date, lang);
   }
 
   const showHero = (view === "today" || view === "tomorrow") && !sp.date;
@@ -66,8 +67,8 @@ async function Slate({ searchParams }: { searchParams: SP }) {
           )}
         </div>
         {games.length === 0 ? (
-          <EmptyState title="No games on this slate">
-            {view === "results" ? "No completed games in the last week." : "There are no NBA games scheduled for this day. Try another date."}
+          <EmptyState title={t("No games on this slate")}>
+            {view === "results" ? t("No completed games in the last week.") : t("There are no NBA games scheduled for this day. Try another date.")}
           </EmptyState>
         ) : view === "upcoming" || view === "results" ? (
           <GroupedGrid games={games} />
@@ -87,14 +88,15 @@ function Grid({ games }: { games: GameSummary[] }) {
   );
 }
 
-function GroupedGrid({ games }: { games: GameSummary[] }) {
+async function GroupedGrid({ games }: { games: GameSummary[] }) {
+  const [t, lang] = await Promise.all([getT(), getLang()]);
   const groups = new Map<string, GameSummary[]>();
   for (const g of games) groups.set(g.game_date, [...(groups.get(g.game_date) ?? []), g]);
   return (
     <div className="flex flex-col gap-8">
       {[...groups.entries()].map(([d, gs]) => (
         <div key={d}>
-          <h3 className="mb-3 text-sm font-semibold text-muted">{longDate(d)} · {gs.length} games</h3>
+          <h3 className="mb-3 text-sm font-semibold text-muted">{longDate(d, lang)} · {t(gs.length === 1 ? "{n} game" : "{n} games", { n: gs.length })}</h3>
           <Grid games={gs} />
         </div>
       ))}
@@ -102,20 +104,21 @@ function GroupedGrid({ games }: { games: GameSummary[] }) {
   );
 }
 
-function DateStrip({ dates, selected, today }: { dates: { date: string; games: number }[]; selected: string; today: string }) {
+async function DateStrip({ dates, selected, today }: { dates: { date: string; games: number }[]; selected: string; today: string }) {
+  const [t, lang] = await Promise.all([getT(), getLang()]);
   const idx = Math.max(0, dates.findIndex((d) => d.date >= selected));
   const window = dates.slice(Math.max(0, idx - 3), idx + 4);
   return (
-    <nav aria-label="Choose a date" className="no-scrollbar flex gap-1.5 overflow-x-auto">
+    <nav aria-label={t("Choose a date")} className="no-scrollbar flex gap-1.5 overflow-x-auto">
       {window.map((d) => {
         const active = d.date === selected;
         return (
-          <Link key={d.date} href={d.date === today ? "/" : `/?date=${d.date}`} aria-current={active ? "date" : undefined}
+          <Link key={d.date} href={d.date === today ? "/nba" : `/nba?date=${d.date}`} aria-current={active ? "date" : undefined}
             className={`flex min-w-[64px] flex-col items-center rounded-xl border px-3 py-1.5 text-xs transition ${
               active ? "border-accent bg-accent-soft text-accent" : "border-line bg-surface text-muted hover:text-ink"}`}>
-            <span className="font-semibold">{d.date === today ? "Today" : weekday(d.date)}</span>
-            <span className="tabular">{shortDate(d.date)}</span>
-            <span className="text-[10px] opacity-80">{d.games} games</span>
+            <span className="font-semibold">{d.date === today ? t("Today") : weekday(d.date, lang)}</span>
+            <span className="tabular">{shortDate(d.date, lang)}</span>
+            <span className="text-[10px] opacity-80">{t(d.games === 1 ? "{n} game" : "{n} games", { n: d.games })}</span>
           </Link>
         );
       })}
@@ -123,17 +126,18 @@ function DateStrip({ dates, selected, today }: { dates: { date: string; games: n
   );
 }
 
-function FeaturedCard({ game }: { game: GameSummary }) {
+async function FeaturedCard({ game }: { game: GameSummary }) {
+  const [t, lang] = await Promise.all([getT(), getLang()]);
   const p = game.prediction!;
   const fav = p.favorite === "home" ? game.home : game.away;
   const pFav = Math.max(p.p_home_win, p.p_away_win);
   return (
-    <Link href={`/games/${game.game_id}`} className="group lg:col-span-2">
+    <Link href={`/nba/games/${game.game_id}`} className="group lg:col-span-2">
       <Card className="flex h-full flex-col gap-5 p-6 transition group-hover:border-accent/40">
         <div className="flex items-center gap-2 text-xs text-muted">
-          <Pill tone="accent">Closest matchup</Pill>
-          <span>{tipoffTime(game.tipoff_utc)}</span>
-          {game.is_cup && <span>· NBA Cup {game.sub_label ? `· ${game.sub_label}` : ""}</span>}
+          <Pill tone="accent">{t("Closest matchup")}</Pill>
+          <span>{tipoffTime(game.tipoff_utc, lang)}</span>
+          {game.is_cup && <span>· {t("NBA Cup")} {game.sub_label ? `· ${t(game.sub_label)}` : ""}</span>}
         </div>
         <div className="flex flex-wrap items-center justify-between gap-6">
           <div className="flex items-center gap-4">
@@ -143,10 +147,10 @@ function FeaturedCard({ game }: { game: GameSummary }) {
             </div>
             <div>
               <h2 className="text-xl font-bold tracking-tight sm:text-2xl">{game.away.name} vs {game.home.name}</h2>
-              <p className="text-sm text-muted">{game.away.record} · {game.home.record} · Who wins?</p>
+              <p className="text-sm text-muted">{game.away.record} · {game.home.record} · {t("Who wins?")}</p>
             </div>
           </div>
-          <Gauge p={pFav} label={`${fav.abbreviation} chance`} size={110} />
+          <Gauge p={pFav} label={t("{team} chance", { team: fav.abbreviation })} size={110} />
         </div>
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 sm:gap-3">
           {[game.away, game.home].map((s) => {
@@ -160,7 +164,7 @@ function FeaturedCard({ game }: { game: GameSummary }) {
                 </div>
                 <div className="text-right">
                   <div className="tabular text-lg font-bold">{Math.round(pv * 100)}%</div>
-                  {proj !== null && <div className="tabular whitespace-nowrap text-[11px] text-muted">proj. {proj.toFixed(0)} pts</div>}
+                  {proj !== null && <div className="tabular whitespace-nowrap text-[11px] text-muted">{t("proj. {n} pts", { n: proj.toFixed(0) })}</div>}
                 </div>
               </div>
             );
@@ -169,8 +173,8 @@ function FeaturedCard({ game }: { game: GameSummary }) {
         <div className="mt-auto flex flex-col gap-2">
           <ProbBar home={p.p_home_win} homeAbbr={game.home.abbreviation} awayAbbr={game.away.abbreviation} height={8} />
           <div className="flex items-center justify-between text-xs text-muted">
-            <span className="hidden sm:inline">{game.away.abbreviation} {Math.round(p.p_away_win * 100)}% · {game.home.abbreviation} {Math.round(p.p_home_win * 100)}% · {p.favorite_label}</span>
-            <span className="font-semibold text-accent group-hover:underline">View full forecast →</span>
+            <span className="hidden sm:inline">{game.away.abbreviation} {Math.round(p.p_away_win * 100)}% · {game.home.abbreviation} {Math.round(p.p_home_win * 100)}% · {t(p.favorite_label)}</span>
+            <span className="font-semibold text-accent group-hover:underline">{t("View full forecast →")}</span>
           </div>
         </div>
       </Card>
@@ -178,10 +182,11 @@ function FeaturedCard({ game }: { game: GameSummary }) {
   );
 }
 
-function ConfidentList({ games }: { games: GameSummary[] }) {
+async function ConfidentList({ games }: { games: GameSummary[] }) {
+  const [t, lang] = await Promise.all([getT(), getLang()]);
   return (
     <Card className="p-5">
-      <h2 className="mb-3 text-sm font-semibold">Most confident forecasts</h2>
+      <h2 className="mb-3 text-sm font-semibold">{t("Most confident forecasts")}</h2>
       <ul className="flex flex-col divide-y divide-line">
         {games.map((g) => {
           const p = g.prediction!;
@@ -189,11 +194,11 @@ function ConfidentList({ games }: { games: GameSummary[] }) {
           const opp = p.favorite === "home" ? g.away : g.home;
           return (
             <li key={g.game_id}>
-              <Link href={`/games/${g.game_id}`} className="flex items-center gap-3 py-2.5 hover:opacity-80">
+              <Link href={`/nba/games/${g.game_id}`} className="flex items-center gap-3 py-2.5 hover:opacity-80">
                 <TeamBadge abbr={fav.abbreviation} size={30} />
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-sm font-medium">{fav.name} <span className="text-muted">{p.favorite === "home" ? "vs" : "@"} {opp.abbreviation}</span></div>
-                  <div className="text-[11px] text-muted">{tipoffTime(g.tipoff_utc)}</div>
+                  <div className="text-[11px] text-muted">{tipoffTime(g.tipoff_utc, lang)}</div>
                 </div>
                 <span className="tabular text-sm font-bold">{Math.round(Math.max(p.p_home_win, p.p_away_win) * 100)}%</span>
               </Link>

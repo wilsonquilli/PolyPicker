@@ -1,5 +1,5 @@
-// Badge colors per team (approximate primary colors). Teams are shown with abbreviation
-// badges, not official logos (trademarks).
+// Team primary colors: used for accents and as the fallback badge when a team has no logo.
+// Logos live in public/logos/nba/{ABBR}.webp (256px, trimmed; see README).
 export const TEAM_COLORS: Record<string, string> = {
   ATL: "#C8102E", BOS: "#007A33", BKN: "#000000", CHA: "#1D1160", CHI: "#CE1141", CLE: "#860038",
   DAL: "#00538C", DEN: "#0E2240", DET: "#C8102E", GSW: "#1D428A", HOU: "#CE1141", IND: "#002D62",
@@ -10,4 +10,10 @@ export const TEAM_COLORS: Record<string, string> = {
 
 export function teamColor(abbr: string): string {
   return TEAM_COLORS[abbr] ?? "#5f6878";
+}
+
+/** Teams with a logo file at public/logos/nba/{ABBR}.webp. */
+const LOGOS = new Set(Object.keys(TEAM_COLORS));
+export function hasTeamLogo(abbr: string): boolean {
+  return LOGOS.has(abbr);
 }

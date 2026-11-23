@@ -59,11 +59,44 @@ def upsert(conn: Connection, table: Table, df: pl.DataFrame, *, provenance: dict
 
 
 def upsert_seasons(conn: Connection, games: pl.DataFrame) -> dict[str, int]:
+    """Create seasons and widen their date range. Never narrows it, so a source that only
+    sends a few games (e.g. last night's results) can't shrink a season to those dates."""
     from polypicker.domain.games import season_label
+    if games.is_empty():
+        return {"upserted": 0}
     s = (games.group_by("season").agg(pl.col("game_date_et").min().alias("start_date"),
                                       pl.col("game_date_et").max().alias("end_date"))
          .with_columns(pl.col("season").map_elements(season_label, return_dtype=pl.String).alias("label")))
-    return upsert(conn, m.Season.__table__, s)
+    t = m.Season.__table__
+    stmt = insert(t).values(s.to_dicts())
+    stmt = stmt.on_conflict_do_update(index_elements=["season"], set_={
+        "label": stmt.excluded.label,
+        "start_date": func.least(t.c.start_date, stmt.excluded.start_date),
+        "end_date": func.greatest(t.c.end_date, stmt.excluded.end_date)})
+    conn.execute(stmt)
+    return {"upserted": s.height}
+
+
+def drop_result_downgrades(games: pl.DataFrame, final_ids: set[int]) -> pl.DataFrame:
+    """Rows that would turn a game with a final result back into scheduled/unknown/live."""
+    if games.is_empty() or not final_ids:
+        return games.clear()
+    return games.filter((pl.col("status") != "final") & pl.col("game_id").is_in(list(final_ids)))
+
+
+def protect_final_results(conn: Connection, games: pl.DataFrame, table: str = "games") -> tuple[pl.DataFrame, int]:
+    """Never let a source without a result overwrite one we already have (e.g. re-importing an older
+    dataset download after the live feed recorded the final). Returns (games to load, rows skipped)."""
+    if games.is_empty():
+        return games, 0
+    assert table in ("games", "nfl_games", "soccer_games")
+    finals = {r[0] for r in conn.execute(text(
+        f"SELECT game_id FROM {table} WHERE status = 'final' AND game_id = ANY(:ids)"),
+        {"ids": games["game_id"].to_list()})}
+    bad = drop_result_downgrades(games, finals)
+    if bad.is_empty():
+        return games, 0
+    return games.filter(~pl.col("game_id").is_in(bad["game_id"].implode())), bad.height
 
 
 def upsert_id_mappings(conn: Connection, source_id: int, data) -> int:

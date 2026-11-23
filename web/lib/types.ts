@@ -45,6 +45,21 @@ export interface PredictionHeadline {
   favorite_label: "favorite" | "slight favorite" | "toss-up";
 }
 
+export interface Absence {
+  player_id: number;
+  name: string | null;
+  status: string; // Out | Doubtful | Questionable | Day-To-Day ...
+  detail: string | null;
+  source: string;
+  usual_minutes: number;
+}
+
+export interface TeamAbsences {
+  team_id: number;
+  players: Absence[];
+  minutes_missing_pct: number;
+}
+
 export type GameStatus = "scheduled" | "live" | "final" | "postponed" | "canceled" | "unknown";
 
 export interface GameSummary {
@@ -202,8 +217,12 @@ export interface GamePredictions {
       away_pct: number;
       factors?: Factor[];
       distribution?: Dist;
+      absences?: Partial<Record<"home" | "away", TeamAbsences>>;
     };
     projected_score?: { home: number; away: number };
+    polymarket?: { p_home: number; price_type: "live" | "pregame"; volume_usd: number | null; url: string; fetched_at: string; note: string };
+    sportsbook?: { provider: string; p_home: number; home_ml: number | null; away_ml: number | null;
+      spread_home: number | null; total: number | null; is_closing: boolean; fetched_at: string; note: string };
     spread?: GameLineMarket;
     total?: GameLineMarket;
   } | null;
@@ -229,13 +248,6 @@ export interface StandingRow extends TeamRef {
   avg_margin: number | null;
   games_behind?: number;
   win_pct?: number | null;
-}
-
-export interface SearchResult {
-  type: "team" | "player";
-  id: number;
-  name: string;
-  subtitle: string | null;
 }
 
 export interface PlayerAgg {

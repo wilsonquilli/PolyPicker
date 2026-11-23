@@ -20,7 +20,7 @@ def load_games(engine: Engine) -> pl.DataFrame:
     """Competitive games (final + upcoming); canceled games excluded."""
     return _read(engine, f"""
         SELECT game_id, season, season_type, tipoff_utc, game_date_et, home_team_id, away_team_id,
-               status, home_score, away_score
+               status, home_score, away_score, arena_city
         FROM games
         WHERE season_type IN {COMPETITIVE} AND status <> 'canceled'
         ORDER BY tipoff_utc, game_id""").with_columns(
