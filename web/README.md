@@ -48,7 +48,8 @@ with hot reload in `npm run dev`. Bump `VERSION` in `public/sw.js` when changing
 * **Desktop**: install icon in Chrome/Edge's address bar, or the button on `/install`.
 
 **Testing on a real phone.** Installing and offline mode need **HTTPS** (only `localhost` is exempt). A phone on your
-Wi-Fi visiting `http://<your-computer-ip>:3000` can browse, but won't get the full app. For a free HTTPS URL to
+Wi-Fi visiting `http://<your-computer-ip>:3000` can browse and use everything (the dev server allows home-network
+addresses via `allowedDevOrigins` in `next.config.ts`; restart `npm run dev` after changing it), but can't install it. For a free HTTPS URL to
 your laptop, run a production build and open a quick tunnel, for example:
 
 ```bash
@@ -58,6 +59,17 @@ npx cloudflared tunnel --url http://localhost:3000 # prints https://<random>.try
 
 Open that URL on the phone and install. For a permanent public URL, deploy the web app (e.g. Vercel's free tier)
 and host the API and database somewhere reachable. Set `API_URL` to the API's address.
+
+## Splash screen
+
+Same look everywhere: the PolyPicker logo on brand navy (`#021022`).
+- **Web:** `components/Splash.tsx` + `.pp-splash*` styles in `app/globals.css`. Server-rendered so it covers the first
+  paint, fades out once the app is ready (at least ~0.9 s; 0.4 s in the installed app), once per browser session.
+  Never shown again on page changes or language switches; a CSS fallback hides it even without JavaScript.
+- **iOS (installed):** `public/splash/launch-*.png`, one per device screen size, linked via
+  `lib/splash-screens.json` in the root layout. Regenerate after a logo change:
+  `backend/.venv/bin/python web/scripts/generate-splash.py` (reads `design/PolyPickerLogo.png`).
+- **Android (installed):** built by Chrome from `app/manifest.ts` (`background_color`, the 512 px icon and the name).
 
 ## Sports
 

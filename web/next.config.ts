@@ -6,6 +6,10 @@ const API_URL = (process.env.API_URL ?? "http://localhost:8000/api/v1").replace(
 const nextConfig: NextConfig = {
   /* config options here */
   cacheComponents: true,
+  // Dev server only: let phones/tablets on the home network (and a quick HTTPS tunnel) load the dev build.
+  // Without this, Next blocks its dev scripts for any host but localhost, so pages render but nothing is
+  // interactive on the phone. Has no effect on production builds.
+  allowedDevOrigins: ["192.168.*.*", "10.*.*.*", "172.*.*.*", "*.local", "*.trycloudflare.com"],
   partialPrefetching: true,
   turbopack: {
     rules: {

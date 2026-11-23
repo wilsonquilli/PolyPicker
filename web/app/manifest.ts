@@ -13,8 +13,10 @@ export default function manifest(): MetadataRoute.Manifest {
     display: "standalone",
     display_override: ["standalone", "minimal-ui"],
     orientation: "any",
-    background_color: "#ffffff",
-    theme_color: "#1f6ffc",
+    // Android builds the launch screen from these: brand navy + the icon + the name (same look as the iOS launch
+    // images in public/splash and the web splash overlay).
+    background_color: "#021022",
+    theme_color: "#021022",
     categories: ["sports", "news"],
     lang: "en-US",
     dir: "ltr",
