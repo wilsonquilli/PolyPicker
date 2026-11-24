@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useLayoutEffect, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import { useLang, useT } from "@/components/i18n";
 import { intlLocale, type Lang } from "@/lib/i18n";
@@ -94,5 +94,68 @@ export function BackToTop() {
         show ? "translate-y-0 opacity-100" : "pointer-events-none translate-y-3 opacity-0"}`}>
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden><path d="M12 19V5M5 12l7-7 7 7" /></svg>
     </button>
+  );
+}
+
+/**
+ * Horizontal row that scrolls by swipe (touch) or with arrow buttons (mouse: a plain wheel can't scroll sideways).
+ * The buttons appear only on devices with a fine pointer, and only toward the side that has more to show.
+ */
+export function Carousel({ children, label, className = "" }: { children: React.ReactNode; label: string; className?: string }) {
+  const t = useT();
+  const ref = useRef<HTMLUListElement>(null);
+  const [edge, setEdge] = useState({ start: true, end: true });
+  const measure = useCallback(() => {
+    const el = ref.current;
+    if (!el) return;
+    setEdge({ start: el.scrollLeft <= 4, end: el.scrollLeft + el.clientWidth >= el.scrollWidth - 4 });
+  }, []);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [measure, children]);
+  const go = (dir: 1 | -1) => ref.current?.scrollBy({ left: dir * ref.current.clientWidth * 0.8, behavior: "smooth" });
+  const btn = "absolute top-1/2 z-10 hidden h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full border border-line bg-surface/95 text-ink shadow-md backdrop-blur transition hover:border-accent/50 pointer-fine:flex";
+  return (
+    <div className="relative">
+      <ul ref={ref} aria-label={label} onScroll={measure} className={`no-scrollbar flex snap-x gap-3 overflow-x-auto ${className}`}>{children}</ul>
+      {!edge.start && (
+        <button type="button" aria-label={t("Scroll left")} onClick={() => go(-1)} className={`${btn} -left-3`}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M15 18l-6-6 6-6" /></svg>
+        </button>
+      )}
+      {!edge.end && (
+        <button type="button" aria-label={t("Scroll right")} onClick={() => go(1)} className={`${btn} -right-3`}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M9 18l6-6-6-6" /></svg>
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** Tabs over server-rendered panels (all panels are in the HTML; the inactive ones are hidden). */
+export function Tabs({ tabs, panels, initial = 0, label }: {
+  tabs: { key: string; label: React.ReactNode }[]; panels: React.ReactNode[]; initial?: number; label: string;
+}) {
+  const [active, setActive] = useState(initial);
+  return (
+    <div className="flex flex-col gap-4">
+      <div role="tablist" aria-label={label} className="no-scrollbar flex gap-1 self-start overflow-x-auto rounded-xl bg-surface-2 p-1 text-sm">
+        {tabs.map((tab, i) => (
+          <button key={tab.key} type="button" role="tab" id={`tab-${tab.key}`} aria-selected={i === active} aria-controls={`panel-${tab.key}`}
+            onClick={() => setActive(i)}
+            className={`flex items-center gap-1.5 whitespace-nowrap rounded-lg px-3.5 py-1.5 font-medium transition ${i === active ? "bg-surface text-ink shadow-card" : "text-muted hover:text-ink"}`}>
+            {tab.label}
+          </button>
+        ))}
+      </div>
+      {panels.map((p, i) => (
+        <div key={tabs[i].key} role="tabpanel" id={`panel-${tabs[i].key}`} aria-labelledby={`tab-${tabs[i].key}`} hidden={i !== active}>{p}</div>
+      ))}
+    </div>
   );
 }

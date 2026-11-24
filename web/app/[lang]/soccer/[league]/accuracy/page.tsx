@@ -2,8 +2,9 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
 
+import { AccuracyHero, CalibrationCard, KindNote, mergeBins } from "@/components/accuracy";
 import { CalibrationChart } from "@/components/charts";
-import { Card, EmptyState, SectionTitle, Skeleton, StatTile } from "@/components/ui";
+import { EmptyState, SectionTitle, Skeleton, StatTile } from "@/components/ui";
 import { api } from "@/lib/api";
 import { soccerLeague, type SoccerLeague } from "@/lib/soccer";
 import { getT } from "@/lib/i18n/server";
@@ -38,8 +39,7 @@ async function AccuracyBody({ params, searchParams }: { params: LParams; searchP
   return (
     <div className="flex flex-col gap-6">
       <div>
-        <h1 className="text-2xl font-bold tracking-tight">{t("{league} accuracy & calibration", { league: lg.name })}</h1>
-        <p className="max-w-3xl text-sm text-muted">{t("Every forecast is kept unchanged and graded after the match. Soccer has three outcomes, so a coin-flip pick would be right about a third of the time. The ranked probability score (RPS) is the standard measure for home / draw / away forecasts: lower is better.")}</p>
+        <h1 className="text-2xl font-bold tracking-tight">{t("{league} accuracy", { league: lg.name })}</h1>
       </div>
       <Suspense fallback={<Skeleton className="h-72" />}><Accuracy lg={lg} searchParams={searchParams} /></Suspense>
     </div>
@@ -60,25 +60,42 @@ async function Accuracy({ lg, searchParams }: { lg: SoccerLeague; searchParams: 
   return (
     <>
       <div className="flex gap-1 self-start rounded-xl bg-surface-2 p-1 text-sm font-medium">{tab("backtest", t("Backtest this season"))}{tab("live", t("Published live"))}</div>
-      {kind === "backtest" && <p className="rounded-xl bg-warn-soft px-4 py-3 text-sm text-warn">{t("Backtest forecasts were regenerated after the matches using only data available before each match day, with a model trained on earlier seasons. They show expected accuracy; they were not published live.")}</p>}
+      <KindNote kind={kind} unit="match" />
       {!mr ? <EmptyState title={t("Nothing graded yet")}>{kind === "live" ? t("Live accuracy builds up as published forecasts are graded after each match.") : t("No backtest results.")}</EmptyState> : (
         <>
-          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-            <StatTile label={t("Most likely result happened")} value={`${(mr.accuracy * 100).toFixed(1)}%`} sub={t("{n} matches", { n: mr.n })} />
-            <StatTile label={t("RPS")} value={mr.rps.toFixed(3)} sub={t("lower is better")} />
-            <StatTile label={t("Log loss")} value={mr.log_loss.toFixed(3)} sub={t("always guessing ⅓ each = 1.099")} />
-            <StatTile label={t("Draws")} value={t("{p}% forecast", { p: (mr.mean_draw * 100).toFixed(0) })} sub={t("{p}% happened", { p: (mr.draw_rate * 100).toFixed(0) })} />
-          </div>
-          <div className="grid gap-4 lg:grid-cols-3">
-            {[["match_result:home", "Home win"], ["match_result:draw", "Draw"], ["match_result:away", "Away win"]].map(([k, l]) => (
-              <Card key={k} className="p-5">
-                <SectionTitle>{t("Calibration")} · {t(l)}</SectionTitle>
-                {perf?.calibration[k]?.length ? <CalibrationChart bins={perf.calibration[k]} size={260} /> : <p className="text-sm text-muted">{t("No data.")}</p>}
-              </Card>
-            ))}
-          </div>
+          <AccuracyHero n={mr.n} value={mr.accuracy} unit="match"
+            title={t("Called the right result in {w} of {n} matches", { w: Math.round(mr.accuracy * mr.n).toLocaleString(), n: mr.n.toLocaleString() })}
+            sub={t("The result we rated most likely (home win, draw or away win) happened {p} of the time. Soccer has three possible results, so this is harder than it sounds. How that compares:", { p: `${(mr.accuracy * 100).toFixed(1)}%` })}
+            rows={[
+              { label: t("PolyPicker model"), value: mr.accuracy, ours: true },
+              { label: t("Always pick the home team"), value: mr.home_rate },
+              { label: t("Random guess"), value: 1 / 3 },
+            ]} />
+          <p className="-mt-2 text-sm text-muted">{t("Draws are the hardest result to call: we expected a draw in {a}% of matches on average, and {b}% ended level.", { a: (mr.mean_draw * 100).toFixed(0), b: (mr.draw_rate * 100).toFixed(0) })}</p>
+          <CalibrationCard label={t("Home / draw / away")}
+            bins={mergeBins(["match_result:home", "match_result:draw", "match_result:away"].map((k) => perf?.calibration[k] ?? []))}
+            advanced={(
+              <>
+                <div className="tabular mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
+                  <StatTile label={t("RPS")} value={mr.rps.toFixed(3)} sub={t("lower is better")} />
+                  <StatTile label={t("Log loss")} value={mr.log_loss.toFixed(3)} sub={t("always guessing ⅓ each = 1.099")} />
+                </div>
+                <p className="mt-2 text-xs text-muted">{t("The ranked probability score (RPS) is the standard measure for home / draw / away forecasts: lower is better.")}</p>
+                <div className="mt-3 grid gap-4 sm:grid-cols-3">
+                  {[["match_result:home", "Home win"], ["match_result:draw", "Draw"], ["match_result:away", "Away win"]].map(([k, l]) => (
+                    <div key={k}>
+                      <div className="mb-1 text-xs font-semibold text-muted">{t(l)}</div>
+                      {perf?.calibration[k]?.length ? <CalibrationChart bins={perf.calibration[k]} size={260} /> : <p className="text-sm text-muted">{t("No data.")}</p>}
+                    </div>
+                  ))}
+                </div>
+              </>
+            )} />
+          <details className="rounded-2xl border border-line bg-surface shadow-card">
+            <summary className="cursor-pointer px-5 py-4 font-semibold">{t("Advanced stats: goal lines & training validation")}</summary>
+            <div className="overflow-x-auto px-5 pb-5">
           {perf!.lines.length > 0 && (
-            <Card className="overflow-x-auto p-5">
+            <div className="mb-6">
               <SectionTitle>{t("Goal lines")}</SectionTitle>
               <table className="tabular w-full text-sm">
                 <thead><tr className="text-[11px] uppercase tracking-wide text-muted"><th className="py-2 text-left font-semibold">{t("Market")}</th>
@@ -94,13 +111,11 @@ async function Accuracy({ lg, searchParams }: { lg: SoccerLeague; searchParams: 
                   ))}
                 </tbody>
               </table>
-              {perf!.mae.team_goals && <p className="mt-2 text-[11px] text-muted">{t("Expected goals per team were off by {n} goals on average.", { n: perf!.mae.team_goals.value.toFixed(2) })}</p>}
-            </Card>
+            </div>
           )}
-        </>
-      )}
+          {perf!.mae.team_goals && <p className="mb-6 text-xs text-muted">{t("Expected goals per team were off by {n} goals on average.", { n: perf!.mae.team_goals.value.toFixed(2) })}</p>}
       {v && (
-        <Card className="overflow-x-auto p-5">
+        <div>
           <SectionTitle>{t("Validation when the model was trained · {n} matches held out ({s} season)", { n: v.validation_matches, s: `${perf!.active_model!.validation_start.slice(0, 4)}-${String(Number(perf!.active_model!.validation_start.slice(0, 4)) + 1).slice(2)}` })}</SectionTitle>
           <table className="tabular w-full text-sm">
             <thead><tr className="text-[11px] uppercase tracking-wide text-muted"><th className="py-2 text-left font-semibold">{t("Home / draw / away")}</th>
@@ -115,7 +130,11 @@ async function Accuracy({ lg, searchParams }: { lg: SoccerLeague; searchParams: 
           </table>
           <p className="mt-2 text-[11px] text-muted">{t("Draws: model forecast {a}% on average, {b}% happened. Goals per team: model error {c} vs {d} for the league average.", {
             a: (v.draw_rate_predicted * 100).toFixed(1), b: (v.draw_rate_actual * 100).toFixed(1), c: v.goals_mae.toFixed(2), d: v.goals_mae_baseline_train_mean.toFixed(2) })}</p>
-        </Card>
+        </div>
+      )}
+            </div>
+          </details>
+        </>
       )}
     </>
   );

@@ -180,3 +180,38 @@ def test_calendar_year_season_comes_from_kickoff():
     assert g["season"] == 2015
     g, _ = parse_scoreboard_event(ev, "eng.1")
     assert g["season"] == 2014
+
+
+# ---------------------------------------------------------------- betting lines (soccer_odds) + market-implied goals
+
+def _book(name, h, d, a, pid="1", ou=2.5, over=-110, under=-110):
+    return {"provider": {"id": pid, "name": name}, "homeTeamOdds": {"moneyLine": h}, "drawOdds": {"moneyLine": d},
+            "awayTeamOdds": {"moneyLine": a}, "overUnder": ou, "overOdds": over, "underOdds": under}
+
+
+def test_odds_parse_skips_live_and_settled_feeds_and_removes_margin():
+    from polypicker.soccer.etl.odds import consensus, parse_book
+    assert parse_book(_book("ESPN BET - Live Odds", -150, 300, 400)) is None
+    assert parse_book(_book("Bet 365", -150, 300, 400, pid="2000")) is None          # bet-slip feed: settled prices
+    moved = _book("ESPN BET", -5000, 1500, 3800)                                     # headline captured in play
+    moved["homeTeamOdds"]["close"] = {"moneyLine": {"american": "-130"}}
+    moved["awayTeamOdds"]["close"] = {"moneyLine": {"american": "+300"}}
+    assert parse_book(moved) is None
+    steady = _book("ESPN BET", -130, 260, 300)
+    steady["homeTeamOdds"]["close"] = {"moneyLine": {"american": "-130"}}
+    assert parse_book(steady) is not None
+    b = parse_book(_book("DraftKings", -150, 300, 400))
+    assert abs(b["p_home"] + b["p_draw"] + b["p_away"] - 1) < 1e-9 and b["p_home"] > b["p_away"]
+    assert abs(b["p_over"] - 0.5) < 1e-9 and b["total_line"] == 2.5
+    c = consensus([_book("A", -150, 300, 400), _book("B", -140, 280, 380), _book("Live Odds", 900, 900, 900)])
+    assert c["n_books"] == 2 and c["providers"] == "A,B"
+
+
+def test_market_implied_goals_track_the_odds():
+    import numpy as np
+    from polypicker.soccer.ml.market import implied_rates
+    r = implied_rates(np.array([0.70, 0.37, 0.15]), np.array([0.12, 0.35, 0.63]),
+                      np.array([3.5, 2.5, np.nan]), np.array([0.44, 0.56, np.nan]))
+    assert r[0, 0] > 2 > r[0, 1]                   # heavy home favourite
+    assert abs(r[1, 0] - r[1, 1]) < 0.2            # even match
+    assert r[2, 1] > r[2, 0]                       # away favourite, no total quoted

@@ -75,7 +75,7 @@ class NflGame(ProvenanceMixin, Base):
     stadium: Mapped[str | None] = mapped_column(String(128))
     home_rest: Mapped[int | None] = mapped_column(SmallInteger)
     away_rest: Mapped[int | None] = mapped_column(SmallInteger)
-    # Betting-market lines, kept ONLY as an accuracy benchmark -- never a model input.
+    # Closing betting-market lines (nflverse): accuracy benchmark, and the market model's input when posted.
     market_spread_home: Mapped[float | None] = mapped_column(Float)          # + = home favored by N
     market_total: Mapped[float | None] = mapped_column(Float)
     has_player_stats: Mapped[bool] = mapped_column(Boolean, default=False)

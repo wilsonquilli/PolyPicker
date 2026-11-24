@@ -25,7 +25,7 @@ from polypicker.nfl import models as nm
 from polypicker.nfl.markets import PLAYER_MARKETS, ROLLOUT, game_label, moneyline_label, player_label
 from polypicker.nfl.ml import data as ndata
 from polypicker.nfl.ml.features import STATS, build_player_features, build_team_features, matchup_frame
-from polypicker.nfl.ml.game_model import FEATURES as GAME_FEATURES, NflGameModel, design
+from polypicker.nfl.ml.game_model import MarketAwareNflGameModel, NflGameModel, design
 from polypicker.nfl.ml.player_model import NflStatModel, explain_player
 
 log = logging.getLogger(__name__)
@@ -66,10 +66,10 @@ def train_models(engine: Engine, fs: FeatureSet, validation_season: int, *, acti
     art = get_settings().resolved_artifacts_dir()
     art.mkdir(parents=True, exist_ok=True)
     ids: dict[str, int] = {}
-    gm = NflGameModel.train(fs.game_design, train_end, v_start, v_end)
+    gm = MarketAwareNflGameModel.train(fs.game_design, train_end, v_start, v_end)
     gm.version = version
-    ids["game"] = _register(engine, TARGET_GAME, version, "ridge+normal", gm, art, t_start, v_end, v_start, v_end,
-                            {"features": GAME_FEATURES, "lines_supported": gm.lines_supported}, gm.metrics, activate)
+    ids["game"] = _register(engine, TARGET_GAME, version, "ridge+normal+market", gm, art, t_start, v_end, v_start, v_end,
+                            {"features": gm.features, "lines_supported": gm.lines_supported}, gm.metrics, activate)
     for stat in STATS:
         sm = NflStatModel.train(stat, fs.player_train, train_end, v_start, v_end)
         sm.version = version
@@ -93,7 +93,7 @@ def active_model_ids(engine: Engine) -> dict[str, int]:
 
 def forecast(engine: Engine, fs: FeatureSet, model_ids: dict[str, int], game_ids: list[int], *, kind: str,
              data_cutoff: datetime, run_id: int, skip_unchanged: bool = True) -> dict:
-    gm: NflGameModel = load_model(engine, model_ids["game"])
+    gm: NflGameModel | MarketAwareNflGameModel = load_model(engine, model_ids["game"])
     sms: dict[str, NflStatModel] = {s: load_model(engine, model_ids[s]) for s in STATS}
     gd = fs.game_design.filter(pl.col("game_id").is_in(game_ids))
     game_preds = {p["game_id"]: p for p in gm.predict_games(gd)}
@@ -138,9 +138,15 @@ def forecast(engine: Engine, fs: FeatureSet, model_ids: dict[str, int], game_ids
     return {"games_written": written, "games_unchanged": skipped, "prediction_rows": len(out_rows)}
 
 
-def _game_rows(gp: dict, gm: NflGameModel, model_id: int, base: dict, input_hash: str) -> list[dict]:
+def _game_rows(gp: dict, gm: NflGameModel | MarketAwareNflGameModel, model_id: int, base: dict,
+               input_hash: str) -> list[dict]:
     rows = []
-    common = {"factors": gp["factors"], "model_version": gm.version, "qb_out": gp["qb_out"]}
+    # per-game scales: games with a betting line come from the market model, which has its own
+    sig_w, sig_m, sig_t = (gp.get("sigma_win", gm.sigma_win), gp.get("sigma_margin", gm.sigma_margin),
+                           gp.get("sigma_total", gm.sigma_total))
+    lines_ok = gp.get("lines_supported", gm.lines_supported)
+    common = {"factors": gp["factors"], "model_version": gm.version, "qb_out": gp["qb_out"],
+              "uses_market": bool(gp.get("uses_market", False))}
     p_home = gp["p_home_win"]
     for side, team, p in (("home", gp["home_team_id"], p_home), ("away", gp["away_team_id"], 1 - p_home)):
         rows.append({**base, "model_id": model_id, "market": Market.MONEYLINE.value, "subject_type": "team",
@@ -149,23 +155,23 @@ def _game_rows(gp: dict, gm: NflGameModel, model_id: int, base: dict, input_hash
                      "label": moneyline_label(side),
                      "details": ({**common, "input_hash": input_hash,
                                   "distribution": {"type": "normal", "mu_margin_home": gp["mu_margin"],
-                                                   "sigma_win": gm.sigma_win}} if side == "home" else common)})
+                                                   "sigma_win": sig_w}} if side == "home" else common)})
     for side, team, mu in (("home", gp["home_team_id"], gp["mu_home"]), ("away", gp["away_team_id"], gp["mu_away"])):
         rows.append({**base, "model_id": model_id, "market": Market.TEAM_POINTS.value, "subject_type": "team",
                      "subject_id": str(team), "side": side, "threshold_kind": None, "threshold": None,
                      "probability": None, "push_probability": None, "projection": mu,
                      "label": f"Projected {side} points", "details": None})
-    dist = {"lines_supported": gm.lines_supported, "sigma_margin": gm.sigma_margin, "sigma_total": gm.sigma_total,
+    dist = {"lines_supported": lines_ok, "sigma_margin": sig_m, "sigma_total": sig_t,
             "mu_margin_home": gp["mu_margin"], "mu_total": gp["mu_total"], "type": "normal_integer"}
     for mk, proj, lbl in ((Market.SPREAD, gp["mu_margin"], "Projected home margin"),
                           (Market.TOTAL, gp["mu_total"], "Projected total points")):
         rows.append({**base, "model_id": model_id, "market": mk.value, "subject_type": "game", "subject_id": None,
                      "side": None, "threshold_kind": None, "threshold": None, "probability": None,
                      "push_probability": None, "projection": proj, "label": lbl, "details": dist})
-    if gm.lines_supported:
+    if lines_ok:
         center = float(int(gp["mu_margin"] // 1)) + 0.5
         for line in (center - 3, center, center + 3):
-            tp = spread_cover(gp["mu_margin"], gm.sigma_margin, -line)
+            tp = spread_cover(gp["mu_margin"], sig_m, -line)
             rows.append({**base, "model_id": model_id, "market": Market.SPREAD.value, "subject_type": "team",
                          "subject_id": str(gp["home_team_id"]), "side": "home",
                          "threshold_kind": ThresholdKind.HANDICAP.value, "threshold": -line, "probability": tp.p_hit,
@@ -173,7 +179,7 @@ def _game_rows(gp: dict, gm: NflGameModel, model_id: int, base: dict, input_hash
                          "label": game_label(Market.SPREAD, ThresholdKind.HANDICAP, -line, "home"), "details": None})
         tcenter = float(int(gp["mu_total"] // 1)) + 0.5
         for line in (tcenter - 4, tcenter, tcenter + 4):
-            tp = normal_over(gp["mu_total"], gm.sigma_total, line)
+            tp = normal_over(gp["mu_total"], sig_t, line)
             rows.append({**base, "model_id": model_id, "market": Market.TOTAL.value, "subject_type": "game",
                          "subject_id": None, "side": "over", "threshold_kind": ThresholdKind.OVER.value, "threshold": line,
                          "probability": tp.p_hit, "push_probability": tp.p_push, "projection": gp["mu_total"],

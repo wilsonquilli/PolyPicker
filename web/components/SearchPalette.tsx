@@ -6,6 +6,7 @@ import { useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } fro
 import { createPortal } from "react-dom";
 
 import { useT } from "@/components/i18n";
+import { LeagueFlag } from "@/components/LeagueFlag";
 import { TeamBadge } from "@/components/ui";
 import { teamCss, SOCCER_LEAGUES, LEAGUE_SLUGS, type LeagueSlug } from "@/lib/soccer";
 
@@ -231,7 +232,7 @@ function QuickLinks({ onPick }: { onPick: () => void }) {
         {LEAGUE_SLUGS.map((s) => (
           <Link key={s} href={`/soccer/${s}`} onClick={onPick}
             className="flex items-center gap-1.5 rounded-full border border-line px-3 py-1.5 text-xs font-medium hover:bg-surface-2">
-            <span aria-hidden>{SOCCER_LEAGUES[s].flag}</span>{SOCCER_LEAGUES[s].name}
+            <LeagueFlag slug={s} />{SOCCER_LEAGUES[s].name}
           </Link>
         ))}
       </div>

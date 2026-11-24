@@ -2,6 +2,7 @@ import Link from "next/link";
 import { connection } from "next/server";
 import { Suspense } from "react";
 
+import { LeagueFlag } from "@/components/LeagueFlag";
 import { SoccerBadge } from "@/components/soccer/MatchCard";
 import { Card, Skeleton } from "@/components/ui";
 import { api } from "@/lib/api";
@@ -65,7 +66,7 @@ async function LeagueCard({ slug, games, total }: { slug: LeagueSlug; games: rea
   return (
     <Card className="flex flex-col">
       <Link href={`/soccer/${slug}`} className="flex items-center gap-3 border-b border-line px-4 py-3 hover:opacity-80">
-        <span aria-hidden className="text-2xl">{lg.flag}</span>
+        <LeagueFlag slug={slug} size="lg" />
         <div className="min-w-0 flex-1">
           <div className="font-semibold">{lg.name}</div>
           <div className="text-xs text-muted">{t(lg.country)}{lg.kind === "cup" ? ` · ${t("Cup")}` : ""}</div>

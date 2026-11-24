@@ -1,5 +1,6 @@
 import Link from "next/link";
 
+import { LeagueFlag } from "@/components/LeagueFlag";
 import { TeamBadge } from "@/components/ui";
 import { api } from "@/lib/api";
 import type { T } from "@/lib/i18n";
@@ -61,7 +62,6 @@ export async function Futures() {
             {t("Our game models play out the rest of every season thousands of times. A team’s chance is the share of those seasons it wins.")}
           </p>
         </div>
-        <span className="text-xs text-muted">{t("Model probabilities · not betting odds")}</span>
       </div>
 
       {us.length > 0 && (
@@ -165,9 +165,6 @@ function MajorCard({ f, t }: { f: Future; t: T }) {
         <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">{t("Next contenders")}</h3>
         <Contenders f={f} teams={rest.slice(0, 4)} max={Math.max(fav.p_title, 0.01)} />
       </div>
-      <p className="text-[11px] text-faint">
-        {f.method}{fav.p_title < 0.5 ? ` ${t("Even as favorites, {team} miss out in {p} of simulated seasons.", { team: fav.short, p: pct(1 - fav.p_title) })}` : ""}
-      </p>
     </article>
   );
 }
@@ -183,7 +180,7 @@ function SoccerCard({ f, t }: { f: Future; t: T }) {
     <article className="flex h-full min-w-0 flex-col gap-3 rounded-2xl border border-line bg-surface p-4 shadow-card">
       <header className="flex items-center justify-between gap-2 text-xs text-muted">
         <Link href={`/soccer/${f.competition}`} className="flex min-w-0 items-center gap-1.5 hover:text-ink">
-          <span aria-hidden>{lg?.flag}</span><span className="truncate font-semibold text-ink">{lg?.name ?? f.event}</span>
+          <LeagueFlag slug={f.competition as LeagueSlug} /><span className="truncate font-semibold text-ink">{lg?.name ?? f.event}</span>
         </Link>
         <span className="shrink-0">{f.season_label}</span>
       </header>

@@ -26,6 +26,10 @@ from polypicker.ml import metrics
 FEATURES = ["goal_matchup", "sot_matchup", "shot_matchup", "season_matchup", "gf_ew", "opp_ga_ew", "tf_ew", "opp_ta_ew",
             "elo_diff", "home", "rest_days", "opp_rest_days", "promoted", "opp_promoted", "league_goals"]
 ELO_FEATURES = ["elo_diff", "home", "league_goals"]
+# Market model (games with a sportsbook line): log of the market-implied expected goals for this team and
+# against it (see soccer/ml/market.py), plus home.
+MARKET = ["mkt_log_xg", "opp_mkt_log_xg"]
+MARKET_MODEL = ["home"] + MARKET
 FACTOR_GROUPS = {
     "Recent scoring vs. opponent's defence": ["goal_matchup", "gf_ew", "opp_ga_ew"],
     "Chance creation (shots on target)": ["sot_matchup", "tf_ew", "opp_ta_ew"],
@@ -35,16 +39,25 @@ FACTOR_GROUPS = {
     "Home advantage": ["home"],
     "Rest days": ["rest_days", "opp_rest_days"],
     "Newly promoted": ["promoted", "opp_promoted"],
+    "Betting market (sportsbook odds)": ["mkt_log_xg", "opp_mkt_log_xg"],
 }
 MAX_GOALS = 10
 TOTAL_LINES = (0.5, 1.5, 2.5, 3.5, 4.5)
 CALIBRATION_MAX_ECE = 0.04
 
 
-def design(matchups: pl.DataFrame, games: pl.DataFrame) -> pl.DataFrame:
+def design(matchups: pl.DataFrame, games: pl.DataFrame, market: pl.DataFrame | None = None) -> pl.DataFrame:
+    """``market``: game_id, mkt_xg_home, mkt_xg_away (soccer/ml/market.py) -> per-team log market rates."""
     g = games.select("game_id", "home_score", "away_score", "kickoff_utc")
-    return matchups.join(g, on="game_id", how="left").with_columns(
+    out = matchups.join(g, on="game_id", how="left").with_columns(
         pl.when(pl.col("is_home")).then("home_score").otherwise("away_score").alias("y_goals"))
+    if market is None or market.is_empty():
+        return out.with_columns(pl.lit(None, pl.Float64).alias("mkt_log_xg"), pl.lit(None, pl.Float64).alias("opp_mkt_log_xg"))
+    own = pl.when(pl.col("is_home")).then("mkt_xg_home").otherwise("mkt_xg_away")
+    opp = pl.when(pl.col("is_home")).then("mkt_xg_away").otherwise("mkt_xg_home")
+    return (out.join(market, on="game_id", how="left")
+            .with_columns(own.log().alias("mkt_log_xg"), opp.log().alias("opp_mkt_log_xg"))
+            .drop("mkt_xg_home", "mkt_xg_away"))
 
 
 def _X(df: pl.DataFrame, feats=FEATURES) -> np.ndarray:
@@ -120,14 +133,22 @@ class SoccerModel:
     lines_supported: bool
     metrics: dict = field(default_factory=dict)
     version: str = ""
+    feature_list: list[str] = field(default_factory=lambda: list(FEATURES))
+
+    @property
+    def features(self) -> list[str]:
+        return getattr(self, "feature_list", FEATURES)   # models pickled before the market model have no feature_list
 
     @classmethod
-    def train(cls, data: pl.DataFrame, train_end: date, valid_start: date, valid_end: date) -> "SoccerModel":
-        data = data.filter(pl.col("y_goals").is_not_null() & (pl.col("season") > data["season"].min()))
+    def train(cls, data: pl.DataFrame, train_end: date, valid_start: date, valid_end: date,
+              features: list[str] = FEATURES, warmup_season: bool = True) -> "SoccerModel":
+        data = data.filter(pl.col("y_goals").is_not_null())
+        if warmup_season:   # the first season only seeds team ratings
+            data = data.filter(pl.col("season") > data["season"].min())
         tr = data.filter(pl.col("game_date") <= train_end)
         va = data.filter((pl.col("game_date") >= valid_start) & (pl.col("game_date") <= valid_end))
-        pipe = _fit(_X(tr), tr["y_goals"].to_numpy())
-        pv = _paired(va, pipe.predict(_X(va)))
+        pipe = _fit(_X(tr, features), tr["y_goals"].to_numpy())
+        pv = _paired(va, pipe.predict(_X(va, features)))
         lh, la, hg, ag = (pv[c].to_numpy() for c in ("lh", "la", "hg", "ag"))
         rho = fit_rho(lh, la, hg.astype(int), ag.astype(int))
         probs = [outcome_probs(score_grid(x, z, rho)) for x, z in zip(lh, la)]
@@ -160,10 +181,10 @@ class SoccerModel:
         }
         lines_ok = all(v <= CALIBRATION_MAX_ECE for v in ece.values())
         full = data.filter(pl.col("game_date") <= valid_end)
-        return cls(_fit(_X(full), full["y_goals"].to_numpy()), rho, lines_ok, report)
+        return cls(_fit(_X(full, features), full["y_goals"].to_numpy()), rho, lines_ok, report, feature_list=list(features))
 
     def predict_games(self, rows: pl.DataFrame) -> list[dict]:
-        X = _X(rows)
+        X = _X(rows, self.features)
         mu = self.pipeline.predict(X)
         scaler, glm = self.pipeline.steps[0][1], self.pipeline.steps[1][1]
         contrib = X * (glm.coef_ / scaler.scale_)          # log-goal contributions
@@ -177,16 +198,71 @@ class SoccerModel:
             lh, la = float(mu[ih]), float(mu[ia])
             o = outcome_probs(score_grid(lh, la, self.rho))
             out.append({"game_id": gid, "home_team_id": d["team_id"][ih], "away_team_id": d["team_id"][ia],
-                        "xg_home": lh, "xg_away": la, **o,
+                        "xg_home": lh, "xg_away": la, **o, "rho": self.rho, "lines_supported": self.lines_supported,
                         "factors": self._factors(contrib[ih] - contrib[ia], lh, la)})
         return out
 
     def _factors(self, diff: np.ndarray, lh: float, la: float) -> list[dict]:
         """Each factor's effect on the expected goal difference (log-scale contributions, scaled to goals)."""
         scale = (lh + la) / 2
-        out = []
+        out, now = [], self.features
         for name, feats in FACTOR_GROUPS.items():
-            v = float(sum(diff[FEATURES.index(f)] for f in feats)) * scale
+            feats = [f for f in feats if f in now]
+            if not feats:
+                continue
+            v = float(sum(diff[now.index(f)] for f in feats)) * scale
             if abs(v) >= 0.03:
                 out.append({"factor": name, "home_goal_edge": round(v, 2), "favors": "home" if v > 0 else "away"})
         return sorted(out, key=lambda x: -abs(x["home_goal_edge"]))
+
+
+def _ids_with_market(df: pl.DataFrame) -> pl.Series:
+    ok = pl.all_horizontal([pl.col(c).is_not_null() & pl.col(c).is_not_nan() for c in MARKET])
+    return df.filter(ok).group_by("game_id").len().filter(pl.col("len") == 2)["game_id"]
+
+
+MIN_MARKET_TRAIN_MATCHES = 300
+
+
+@dataclass
+class MarketAwareSoccerModel:
+    """The market model for matches with sportsbook odds, the stats model otherwise."""
+    base: SoccerModel
+    market: SoccerModel | None
+    metrics: dict = field(default_factory=dict)
+    version: str = ""
+
+    @property
+    def rho(self) -> float: return self.base.rho
+    @property
+    def lines_supported(self) -> bool: return self.base.lines_supported
+    @property
+    def features(self) -> list[str]: return self.base.features + (MARKET if self.market else [])
+
+    @classmethod
+    def train(cls, data: pl.DataFrame, train_end: date, valid_start: date, valid_end: date) -> "MarketAwareSoccerModel":
+        base = SoccerModel.train(data, train_end, valid_start, valid_end, FEATURES)
+        mdata = data.filter(pl.col("game_id").is_in(_ids_with_market(data).implode()))
+        tr_n = mdata.filter(pl.col("game_date") <= train_end).height // 2
+        va_n = mdata.filter((pl.col("game_date") >= valid_start) & (pl.col("game_date") <= valid_end)).height // 2
+        if tr_n < MIN_MARKET_TRAIN_MATCHES or va_n < 30:
+            return cls(base, None, {**base.metrics, "market_model": None,
+                                    "market_model_skipped": f"{tr_n} training / {va_n} validation matches with odds"})
+        # odds-era matches are well past the ratings warm-up, so no season is discarded
+        market = SoccerModel.train(mdata, train_end, valid_start, valid_end, MARKET_MODEL, warmup_season=False)
+        mm = market.metrics
+        report = {**mm, "games_with_market": mm["validation_matches"],
+                  "base_model": {k: base.metrics[k] for k in ("validation_matches", "match_result", "match_result_baseline_elo",
+                                                              "goals_mae", "line_ece")},
+                  "market_model": {"features": MARKET_MODEL, "match_result": mm["match_result"]}}
+        return cls(base, market, report)
+
+    def predict_games(self, rows: pl.DataFrame) -> list[dict]:
+        if self.market is None or not all(c in rows.columns for c in MARKET):
+            return [{**g, "uses_market": False} for g in self.base.predict_games(rows)]
+        ok = _ids_with_market(rows).implode()
+        with_m, without = rows.filter(pl.col("game_id").is_in(ok)), rows.filter(~pl.col("game_id").is_in(ok))
+        out = [{**g, "uses_market": True} for g in self.market.predict_games(with_m)] if with_m.height else []
+        out += [{**g, "uses_market": False} for g in self.base.predict_games(without)] if without.height else []
+        return out
+

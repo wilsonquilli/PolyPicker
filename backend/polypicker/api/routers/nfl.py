@@ -592,7 +592,7 @@ def search(q_: str = Query(..., alias="q", min_length=2), limit: int = Query(8, 
 def model_performance(kind: Kind | None = None, season: int | None = None, category: list[Category] | None = Query(None),
                       conn: Connection = Depends(get_conn)):
     """Accuracy, Brier, calibration and MAE from graded NFL snapshots, the betting-market benchmark on the same
-    games (a yardstick only), and the held-out validation metrics of the active models."""
+    games (benchmark; also the market model input when posted), and the held-out validation metrics of the active models."""
     where, params = ["1=1"], {}
     if kind:
         where.append("p.kind = :k"); params["k"] = kind
@@ -649,8 +649,8 @@ def model_performance(kind: Kind | None = None, season: int | None = None, categ
     if market and market["n"]:
         bench = {"n": market["n"], "brier": _r(market["brier"]), "accuracy": _r(market["accuracy"]),
                  "margin_mae": _r(market["margin_mae"], 3), "total_mae": _r(market["total_mae"], 3),
-                 "note": "Closing betting-market lines on the same games, shown only as a yardstick. They are never a "
-                         "model input, and PolyPicker does not offer or facilitate wagering."}
+                 "note": "Closing betting-market lines on the same games. When a game has a posted line, the model uses "
+                         "it as an input. PolyPicker does not offer or facilitate wagering."}
     return {"data": {"filters": {"kind": kind, "season": season, "category": category}, "markets": by,
                      "market_benchmark": bench, "active_models": active},
             "meta": _pmeta(extra={"note": "Backtest metrics use point-in-time forecasts regenerated after the fact; "

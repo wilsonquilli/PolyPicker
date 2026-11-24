@@ -1,8 +1,9 @@
 import Link from "next/link";
 import { Suspense } from "react";
 
+import { AccuracyHero, CalibrationCard, KindNote, VsMarketCard } from "@/components/accuracy";
 import { CalibrationChart } from "@/components/charts";
-import { Card, EmptyState, Pill, SectionTitle, Skeleton, StatTile } from "@/components/ui";
+import { EmptyState, Pill, SectionTitle, Skeleton } from "@/components/ui";
 import { api } from "@/lib/api";
 import { getT } from "@/lib/i18n/server";
 
@@ -42,10 +43,7 @@ export default async function NflAccuracyPage({ searchParams }: { searchParams: 
   return (
     <div className="flex flex-col gap-6">
       <div>
-        <h1 className="text-2xl font-bold tracking-tight">{t("{league} accuracy & calibration", { league: "NFL" })}</h1>
-        <p className="max-w-3xl text-sm text-muted">
-          {t("Every forecast is kept unchanged and graded against the final result. A well-calibrated model’s 70% calls should happen about 70% of the time. The betting market is shown only as a yardstick; it is never a model input.")}
-        </p>
+        <h1 className="text-2xl font-bold tracking-tight">{t("NFL accuracy")}</h1>
       </div>
       <Suspense fallback={<div className="grid gap-4 lg:grid-cols-3"><Skeleton className="h-72" /><Skeleton className="h-72 lg:col-span-2" /></div>}>
         <Accuracy searchParams={searchParams} />
@@ -85,30 +83,38 @@ async function Accuracy({ searchParams }: { searchParams: SP }) {
           ))}
         </div>
       </div>
-      {kind === "backtest" && (
-        <p className="rounded-xl bg-warn-soft px-4 py-3 text-sm text-warn">
-          {t("Backtest forecasts were regenerated after the games, using only data available before each game day and models trained on earlier seasons. They show expected accuracy; they were not published live.")}
-        </p>
-      )}
+      <KindNote kind={kind} />
       {!ml?.winner_accuracy ? (
         <EmptyState title={t("Nothing graded yet")}>{kind === "live" ? t("Live accuracy builds up as published forecasts are graded after each game.") : t("No backtest results.")}</EmptyState>
       ) : (
         <>
-          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-            <StatTile label={t("Winner accuracy")} value={`${(ml.winner_accuracy.value * 100).toFixed(1)}%`} sub={t("{n} games · favorite won", { n: ml.winner_accuracy.n })} />
-            <StatTile label={t("Winner Brier")} value={ml.probability_metrics ? (ml.probability_metrics.brier).toFixed(3) : "—"} sub={t("lower is better · coin flip = 0.250")} />
-            <StatTile label={t("Market Brier (same games)")} value={bench ? bench.brier.toFixed(3) : "—"} sub={bench ? t("market favorite won {p}%", { p: (bench.accuracy * 100).toFixed(1) }) : t("yardstick only")} />
-            <StatTile label={t("Score error")} value={perf?.markets.team_points?.mae ? `${perf.markets.team_points.mae.value.toFixed(1)} ${t("pts")}` : "—"} sub={t("avg. per team")} />
-          </div>
-          <div className="grid gap-4 lg:grid-cols-3">
-            <Card className="p-5">
-              <SectionTitle>{t("Calibration")} · {t(MARKETS.find((x) => x.id === market)?.label ?? "")}</SectionTitle>
-              {m?.calibration?.length ? <CalibrationChart bins={m.calibration} /> : <p className="text-sm text-muted">{t("No graded probabilities for this market yet.")}</p>}
-              {m?.probability_metrics && (
-                <p className="mt-2 text-xs text-muted">{t("Average forecast {a}% vs. actual hit rate {h}% over {n} graded lines.", { a: (m.probability_metrics.mean_predicted * 100).toFixed(1), h: (m.probability_metrics.hit_rate * 100).toFixed(1), n: m.probability_metrics.n.toLocaleString() })}</p>
-              )}
-            </Card>
-            <Card className="overflow-x-auto p-5 lg:col-span-2">
+          <AccuracyHero n={ml.winner_accuracy.n} value={ml.winner_accuracy.value}
+            title={t("Picked the winner in {w} of {n} games", { w: Math.round(ml.winner_accuracy.value * ml.winner_accuracy.n).toLocaleString(), n: ml.winner_accuracy.n.toLocaleString() })}
+            sub={t("The team we gave the better chance won {p} of the time. How that compares:", { p: `${(ml.winner_accuracy.value * 100).toFixed(1)}%` })}
+            rows={[
+              { label: t("PolyPicker model"), value: ml.winner_accuracy.value, ours: true },
+              ...(bench ? [{ label: t("Betting market"), value: bench.accuracy, sub: bench.n !== ml.winner_accuracy.n ? t("on {n} games with prices", { n: bench.n }) : undefined }] : []),
+              { label: t("Coin flip"), value: 0.5 },
+            ]} />
+          {bench && ml.probability_metrics && bench.n === ml.winner_accuracy.n && (
+            <VsMarketCard label={t("Betting market closing line")} who={t("the betting market")}
+              title={kind === "live" ? t("PolyPicker vs the betting market (published forecasts)") : t("PolyPicker vs the betting market (this season’s backtest)")}
+              blurb={t("The closing line is the market’s final price before kickoff, with the bookmaker margin removed — the toughest public benchmark there is.")}
+              footnote={t(bench.note)}
+              v={{ n: bench.n, model: { accuracy: ml.winner_accuracy.value, brier: ml.probability_metrics.brier }, market: { accuracy: bench.accuracy, brier: bench.brier } }} />
+          )}
+          <CalibrationCard label={t(MARKETS.find((x) => x.id === market)?.label ?? "")} bins={m?.calibration} winner={market === "moneyline"}
+            advanced={m?.calibration?.length ? (
+              <>
+                <div className="mt-3"><CalibrationChart bins={m.calibration} /></div>
+                {m.probability_metrics && (
+                  <p className="mt-2 text-xs text-muted">{t("Average forecast {a}% vs. actual hit rate {h}% over {n} graded lines.", { a: (m.probability_metrics.mean_predicted * 100).toFixed(1), h: (m.probability_metrics.hit_rate * 100).toFixed(1), n: m.probability_metrics.n.toLocaleString() })}</p>
+                )}
+              </>
+            ) : undefined} />
+          <details className="rounded-2xl border border-line bg-surface shadow-card">
+            <summary className="cursor-pointer px-5 py-4 font-semibold">{t("Advanced stats: every market & training validation")}</summary>
+            <div className="overflow-x-auto px-5 pb-5">
               <SectionTitle>{t("All markets")}</SectionTitle>
               <table className="tabular w-full text-sm">
                 <thead><tr className="text-[11px] uppercase tracking-wide text-muted">
@@ -134,12 +140,8 @@ async function Accuracy({ searchParams }: { searchParams: SP }) {
                 </tbody>
               </table>
               <p className="mt-2 text-[11px] text-muted">{t("For well-calibrated thresholds, “avg forecast” and “hit rate” should be close. MAE is for the expected value (projected points, margin, total or player stat).")}</p>
-            </Card>
-          </div>
-        </>
-      )}
-      {gameModel && val?.moneyline && (
-        <Card className="overflow-x-auto p-5">
+              {gameModel && val?.moneyline && (
+                <div className="mt-6">
           <SectionTitle>{t("Validation when the models were trained · {n} games held out ({s} season)", { n: val.validation_games ?? 0, s: gameModel.validation_start?.slice(0, 4) ?? "" })}</SectionTitle>
           <table className="tabular w-full text-sm">
             <thead><tr className="text-[11px] uppercase tracking-wide text-muted"><th className="py-2 text-left font-semibold">{t("Winner forecasts")}</th>
@@ -153,7 +155,11 @@ async function Accuracy({ searchParams }: { searchParams: SP }) {
           </table>
           <PropValidation models={perf!.active_models} />
           {bench && <p className="mt-3 text-[11px] text-muted">{t(bench.note)}</p>}
-        </Card>
+                </div>
+              )}
+            </div>
+          </details>
+        </>
       )}
     </>
   );

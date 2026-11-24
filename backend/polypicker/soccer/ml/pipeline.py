@@ -22,7 +22,8 @@ from polypicker.ml.pipeline import _register, finish_run, load_model, start_run
 from polypicker.soccer import models as sm
 from polypicker.soccer.leagues import League
 from polypicker.soccer.ml.features import build_team_features, matchup_frame
-from polypicker.soccer.ml.model import FEATURES, TOTAL_LINES, SoccerModel, design
+from polypicker.soccer.ml.market import odds_features
+from polypicker.soccer.ml.model import TOTAL_LINES, MarketAwareSoccerModel, SoccerModel, design
 
 SIDE_LABEL = {"home": "home wins", "draw": "draw", "away": "away wins"}
 
@@ -53,13 +54,21 @@ def load_stats(engine: Engine) -> pl.DataFrame:
                  schema_overrides={"shots": pl.Int64, "shots_on_target": pl.Int64})
 
 
+def load_market(engine: Engine, competition: str) -> pl.DataFrame:
+    # competition codes come from the league registry, never from users
+    odds = _read(engine, f"SELECT game_id, p_home, p_draw, p_away, total_line, p_over FROM soccer_odds WHERE competition = '{competition}'",
+                 schema_overrides={c: pl.Float64 for c in ("p_home", "p_draw", "p_away", "total_line", "p_over")})
+    return odds_features(odds)
+
+
 def build_features(engine: Engine, league: League) -> FeatureSet:
     """Team ratings run over the league's feature pool (cups: the domestic leagues we cover plus the cups, so a
     club's form carries between competitions); the design and model use only this competition's matches."""
     pool = load_games(engine, league.pool)
     own = pool.filter(pl.col("competition") == league.competition)
     mf = matchup_frame(build_team_features(pool, load_stats(engine)))
-    return FeatureSet(league, own, design(mf.filter(pl.col("game_id").is_in(own["game_id"].implode())), own))
+    return FeatureSet(league, own, design(mf.filter(pl.col("game_id").is_in(own["game_id"].implode())), own,
+                                          load_market(engine, league.competition)))
 
 
 def _bounds(games: pl.DataFrame, season: int) -> tuple[date, date]:
@@ -72,10 +81,11 @@ def train(engine: Engine, fs: FeatureSet, validation_season: int, league: League
     version = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S") + (f"-{tag}" if tag else "")
     art = get_settings().resolved_artifacts_dir()
     art.mkdir(parents=True, exist_ok=True)
-    mdl = SoccerModel.train(fs.design, vs - timedelta(days=1), vs, ve)
+    mdl = MarketAwareSoccerModel.train(fs.design, vs - timedelta(days=1), vs, ve)
     mdl.version = version
-    return _register(engine, (league or fs.league).target, version, "poisson_glm+dixon_coles", mdl, art, fs.games["game_date"].min(), ve, vs, ve,
-                     {"features": FEATURES, "lines_supported": mdl.lines_supported, "rho": mdl.rho}, mdl.metrics, activate)
+    algo = "poisson_glm+dixon_coles" + ("+market" if mdl.market else "")
+    return _register(engine, (league or fs.league).target, version, algo, mdl, art, fs.games["game_date"].min(), ve, vs, ve,
+                     {"features": mdl.features, "lines_supported": mdl.lines_supported, "rho": mdl.rho}, mdl.metrics, activate)
 
 
 def active_model_id(engine: Engine, league: League) -> int:
@@ -90,7 +100,7 @@ def forecast(engine: Engine, fs: FeatureSet, model_id: int, game_ids: list[int],
              run_id: int, skip_unchanged: bool = True) -> dict:
     if not game_ids:   # between rounds / off-season: nothing to forecast
         return {"games_written": 0, "games_unchanged": 0, "prediction_rows": 0}
-    mdl: SoccerModel = load_model(engine, model_id)
+    mdl: SoccerModel | MarketAwareSoccerModel = load_model(engine, model_id)
     preds = mdl.predict_games(fs.design.filter(pl.col("game_id").is_in(game_ids)))
     P = sm.SoccerPrediction
     with engine.connect() as c:
@@ -111,8 +121,9 @@ def forecast(engine: Engine, fs: FeatureSet, model_id: int, game_ids: list[int],
             details = None
             if side == "home":
                 details = {"input_hash": h, "factors": p["factors"], "top_scores": p["top_scores"], "model_version": mdl.version,
+                           "uses_market": bool(p.get("uses_market", False)),
                            "distribution": {"type": "poisson_dixon_coles", "xg_home": p["xg_home"], "xg_away": p["xg_away"],
-                                            "rho": mdl.rho}}
+                                            "rho": p.get("rho", mdl.rho)}}
             rows.append({**base, "market": "match_result", "subject_type": "game",
                          "subject_id": p["home_team_id"] if side == "home" else p["away_team_id"] if side == "away" else None,
                          "side": side, "threshold_kind": None, "threshold": None, "probability": p[side], "push_probability": 0.0,
@@ -121,11 +132,12 @@ def forecast(engine: Engine, fs: FeatureSet, model_id: int, game_ids: list[int],
             rows.append({**base, "market": "team_goals", "subject_type": "team", "subject_id": tid, "side": side,
                          "threshold_kind": None, "threshold": None, "probability": None, "push_probability": None,
                          "projection": xg, "label": f"Expected {side} goals", "details": None})
-        lines = {"lines_supported": mdl.lines_supported}
+        lines_ok = p.get("lines_supported", mdl.lines_supported)
+        lines = {"lines_supported": lines_ok}
         rows.append({**base, "market": "total_goals", "subject_type": "game", "subject_id": None, "side": None,
                      "threshold_kind": None, "threshold": None, "probability": None, "push_probability": None,
                      "projection": p["xg_home"] + p["xg_away"], "label": "Expected total goals", "details": lines})
-        if mdl.lines_supported:
+        if lines_ok:
             for line in TOTAL_LINES:
                 rows.append({**base, "market": "total_goals", "subject_type": "game", "subject_id": None, "side": "over",
                              "threshold_kind": "over", "threshold": line, "probability": p[f"over_{line}"],

@@ -1,13 +1,14 @@
 import Link from "next/link";
 import { connection } from "next/server";
 import { Suspense } from "react";
-import { AutoRefresh } from "@/components/client";
+import { AutoRefresh, Carousel } from "@/components/client";
+import { ComboGrader, PickButton } from "@/components/ComboGrader";
 import { Combos } from "@/components/Combos";
 import { Futures } from "@/components/Futures";
 import { TeamBadge } from "@/components/ui";
 import { api } from "@/lib/api";
 import { addDays } from "@/lib/format";
-import { fromNba, fromNfl, fromSoccer, isSoccer, LEAGUES, nowMs, todayET, whenLabel, type LeagueKey, type Market, type MarketSide } from "@/lib/home";
+import { fromNba, fromNfl, fromSoccer, isSoccer, LEAGUES, legKey, nowMs, todayET, whenLabel, type LeagueKey, type Market, type MarketSide } from "@/lib/home";
 import type { NflGame } from "@/lib/nfl";
 import { LEAGUE_SLUGS, SOCCER_LEAGUES, type SoccerGame } from "@/lib/soccer";
 import type { T } from "@/lib/i18n";
@@ -110,6 +111,7 @@ async function Feed({ searchParams }: { searchParams: SP }) {
         {live.length > 0 && <Glance href="#live-h" tone="live" icon={<span className="h-2 w-2 animate-pulse rounded-full bg-loss" />}>{t(live.length === 1 ? "{n} live game" : "{n} live games", { n: live.length })}</Glance>}
         <Glance href="#markets-h" icon="📅">{t(todayCount === 1 ? "{n} game today" : "{n} games today", { n: todayCount })}</Glance>
         {tomorrowCount > 0 && <Glance href="#markets-h" icon="🗓️">{t("{n} tomorrow", { n: tomorrowCount })}</Glance>}
+        <Glance href="#grader-h" icon="🧮">{t("Combo grader")}</Glance>
         <Glance href="#combos-h" icon="🎯">{t("Combos")}</Glance>
         <Glance href="#futures-h" icon="🏆">{t("Who wins it all?")}</Glance>
         {recent.length > 0 && <Glance href="#recent-h" icon="✅">{t("Just finished")}</Glance>}
@@ -140,11 +142,13 @@ async function Feed({ searchParams }: { searchParams: SP }) {
       {recent.length > 0 && (
         <section aria-labelledby="recent-h">
           <h2 id="recent-h" className="mb-3 text-sm font-semibold">{t("Just finished")}</h2>
-          <ul className="no-scrollbar -mx-1 flex gap-3 overflow-x-auto px-1 pb-1">
-            {recent.map((m) => <li key={m.key} className="shrink-0"><ResultChip m={m} t={t} /></li>)}
-          </ul>
+          <Carousel label={t("Just finished")} className="-mx-1 px-1 pb-1">
+            {recent.map((m) => <li key={m.key} className="shrink-0 snap-start"><ResultChip m={m} t={t} /></li>)}
+          </Carousel>
         </section>
       )}
+
+      <ComboGrader />
 
       <Suspense fallback={<FuturesSkeleton />}>
         <Combos />
@@ -156,10 +160,7 @@ async function Feed({ searchParams }: { searchParams: SP }) {
 
       <section aria-labelledby="markets-h">
         <div className="mb-4 flex flex-col gap-3">
-          <div className="flex items-end justify-between gap-3">
-            <h2 id="markets-h" className="text-xl font-bold tracking-tight">{live.length ? t("Coming up") : t("All forecasts")}</h2>
-            <span className="text-xs text-muted">{t("Model probabilities · not betting odds")}</span>
-          </div>
+          <h2 id="markets-h" className="text-xl font-bold tracking-tight">{live.length ? t("Coming up") : t("All forecasts")}</h2>
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <nav aria-label={t("Filter by sport")} className="no-scrollbar -mx-1 flex gap-1.5 overflow-x-auto px-1">
               <Chip href={href("all", sort)} active={sport === "all"}>{t("All")} <Count n={upcomingAll.length} /></Chip>
@@ -171,7 +172,7 @@ async function Feed({ searchParams }: { searchParams: SP }) {
             </nav>
             <nav aria-label={t("Sort")} className="flex gap-1 self-start rounded-xl bg-surface-2 p-1 text-sm sm:self-auto">
               {SORTS.map((s) => (
-                <Link key={s.key} href={href(sport, s.key)} aria-current={sort === s.key ? "page" : undefined}
+                <Link key={s.key} href={href(sport, s.key)} scroll={false} aria-current={sort === s.key ? "page" : undefined}
                   className={`whitespace-nowrap rounded-lg px-3 py-1.5 font-medium ${sort === s.key ? "bg-surface text-ink shadow-card" : "text-muted"}`}>{t(s.label)}</Link>
               ))}
             </nav>
@@ -235,38 +236,36 @@ function outcomes(m: Market, t: T): { key: "home" | "away" | "draw"; label: stri
 const title = (m: Market) => isSoccer(m) ? `${m.home.short} vs ${m.away.short}` : `${m.away.short} @ ${m.home.short}`;
 
 function MarketCard({ m, when, t }: { m: Market; when: string; t: T }) {
+  // The whole card opens the game (stretched link); outcome rows sit above it and add that leg to the combo grader.
   return (
-    <Link href={m.href}
-      className="group flex flex-col gap-3 rounded-2xl border border-line bg-surface p-4 shadow-card transition hover:-translate-y-0.5 hover:border-accent/40 hover:shadow-md">
+    <article className="group relative flex flex-col gap-3 rounded-2xl border border-line bg-surface p-4 shadow-card transition hover:-translate-y-0.5 hover:border-accent/40 hover:shadow-md">
       <div className="flex items-center gap-2.5">
         <div className="flex -space-x-1.5">
           <Badge m={m} side={isSoccer(m) ? m.home : m.away} size={30} />
           <Badge m={m} side={isSoccer(m) ? m.away : m.home} size={30} />
         </div>
-        <h3 className="min-w-0 flex-1 truncate text-sm font-semibold leading-snug">{title(m)}</h3>
+        <h3 className="min-w-0 flex-1 truncate text-sm font-semibold leading-snug">
+          <Link href={m.href} className="after:absolute after:inset-0 after:rounded-2xl after:content-['']">{title(m)}</Link>
+        </h3>
       </div>
       <ul className="flex flex-col gap-1.5">
-        {outcomes(m, t).map((o) => {
-          const pick = m.pick === o.key;
-          return (
-            <li key={o.key} className="relative overflow-hidden rounded-lg bg-surface-2">
-              <span aria-hidden className={`absolute inset-y-0 left-0 ${pick ? "bg-accent/15" : "bg-ink/[0.04]"}`} style={{ width: o.p !== null ? pct(o.p) : 0 }} />
-              <span className="relative flex items-center justify-between gap-2 px-2.5 py-1.5 text-sm">
-                <span className={`truncate ${pick ? "font-semibold" : ""}`}>{o.label}</span>
-                <span className={`tabular font-bold ${pick ? "text-accent" : "text-muted"}`}>{o.p !== null ? pct(o.p) : "—"}</span>
-              </span>
-            </li>
-          );
-        })}
+        {outcomes(m, t).map((o) => (
+          <li key={o.key}>
+            <PickButton legKey={legKey(m.league, gameId(m), o.key)} label={o.label} p={o.p} modelPick={m.pick === o.key} />
+          </li>
+        ))}
       </ul>
       {m.polymarket && <PolymarketLine m={m} t={t} />}
       <div className="mt-auto flex items-center justify-between gap-2 text-[11px] text-muted">
         <LeagueTag m={m} />
         <span className="tabular shrink-0 font-medium">{when}</span>
       </div>
-    </Link>
+    </article>
   );
 }
+
+/** Market keys are `${league}-${game_id}`. */
+const gameId = (m: Market) => Number(m.key.slice(m.key.lastIndexOf("-") + 1));
 
 /** Polymarket's price for the same game, as a comparison (not a PolyPicker forecast). */
 function PolymarketLine({ m, t }: { m: Market; t: T }) {
@@ -410,7 +409,7 @@ function Glance({ href, icon, tone, children }: { href: string; icon: React.Reac
 
 function Chip({ href, active, children }: { href: string; active: boolean; children: React.ReactNode }) {
   return (
-    <Link href={href} aria-current={active ? "page" : undefined}
+    <Link href={href} scroll={false} aria-current={active ? "page" : undefined}
       className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border px-3.5 py-1.5 text-sm font-medium transition ${
         active ? "border-accent bg-accent-soft text-accent" : "border-line bg-surface text-muted hover:text-ink"}`}>
       {children}

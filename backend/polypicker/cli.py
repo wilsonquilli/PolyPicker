@@ -321,6 +321,17 @@ def soccer_fd_sync(league: str = LEAGUE_OPT, season: int | None = None) -> None:
     _dump(sync_football_data(owner_engine(), season or lg.current_season(), lg))
 
 
+@soccer_app.command("odds")
+def soccer_odds(league: str = LEAGUE_OPT,
+                backfill_from_season: int | None = typer.Option(None, help="Every finished match from this season on without a closing line"),
+                ahead_days: int = 10,
+                force: bool = typer.Option(False, help="With --backfill-from-season: re-fetch matches that already have a closing line")) -> None:
+    """Sportsbook 1X2 + total-goals lines from ESPN (median across books): the market model's input."""
+    from polypicker.soccer.etl.odds import sync_odds
+    _dump(sync_odds(owner_engine(), _lg(league), backfill_from_season=backfill_from_season, ahead_days=ahead_days,
+                    force=force))
+
+
 @soccer_app.command("train")
 def soccer_train(league: str = LEAGUE_OPT,
                  validation_season: int = typer.Option(2025, help="Season (start year) held out for validation"),
@@ -368,7 +379,7 @@ def soccer_logos(refresh: bool = typer.Option(False, help="Re-download every cur
 
 @soccer_app.command("daily")
 def soccer_daily(days: int = 10, league: str | None = typer.Option(None, "--league", "-l", help="One league (default: all)")) -> None:
-    """Scheduled job, per league: ESPN sync, football-data.org backup (if a key is set), grade, publish forecasts.
+    """Scheduled job, per league: ESPN sync, football-data.org backup (if a key is set), betting lines, grade, publish forecasts.
     One league failing doesn't stop the others."""
     from polypicker.soccer.leagues import LEAGUES
     log = logging.getLogger(__name__)
@@ -382,6 +393,10 @@ def soccer_daily(days: int = 10, league: str | None = typer.Option(None, "--leag
             soccer_fd_sync(league=slug, season=None)
         except Exception as e:  # noqa: BLE001
             log.error("football-data.org sync (%s) failed, continuing: %s", slug, e)
+        try:
+            soccer_odds(league=slug, backfill_from_season=None, ahead_days=days, force=False)
+        except Exception as e:  # noqa: BLE001
+            log.error("ESPN soccer odds (%s) failed, continuing: %s", slug, e)
     soccer_grade()
     failed = []
     for slug in slugs:
@@ -422,6 +437,14 @@ def futures_cmd(only: str | None = typer.Option(None, help="Comma-separated: nba
         raise typer.Exit(1)
 
 
+@app.command("combos")
+def combos_cmd() -> None:
+    """Home-page combos: grade the ones in progress (leg by leg), then rebuild every slot from the latest forecasts."""
+    from polypicker.combos import refresh as refresh_combos
+    with owner_engine().begin() as conn:
+        _dump(refresh_combos(conn))
+
+
 @app.command("run-all")
 def run_all() -> None:
     """Morning / midday job: every league's daily pipeline (results, grading, data feeds, forecasts), then
@@ -432,6 +455,7 @@ def run_all() -> None:
     ok["futures"] = _step("futures", futures_cmd, only=None, sims=20_000)
     # New clubs (season start, cup draws) get their logo; existing ones are never re-downloaded.
     ok["logos"] = _step("soccer logos", soccer_logos, refresh=False)
+    ok["combos"] = _step("combos", combos_cmd)
     _dump({"job": "run-all", "ok": ok})
     if not all(ok.values()):
         raise typer.Exit(1)
@@ -446,6 +470,7 @@ def refresh(days: int = 7) -> None:
           "polymarket": _step("polymarket", polymarket, backfill_since=None, retries=2)}
     ok["predict"] = _step("predict", predict, days=days)
     ok["value"] = _step("value", value_cmd)
+    ok["combos"] = _step("combos", combos_cmd)
     _dump({"job": "refresh", "ok": ok})
     if not ok["predict"]:
         raise typer.Exit(1)
@@ -472,6 +497,7 @@ def scores() -> None:
     """Live-score job (every few minutes): syncs only the leagues with games in progress; exits fast otherwise."""
     live = _games_in_progress()
     if not any(live.values()):
+        _step("combos", combos_cmd)   # combos whose games ended since the last sync get graded; slots rebuilt
         _dump({"job": "scores", "in_progress": live, "synced": []})
         return
     done = []
@@ -481,6 +507,7 @@ def scores() -> None:
         done.append(("nfl", _step("nfl sync", nfl_sync, lookback_days=2, retries=1, backfill_quarters=False)))
     if live.get("soccer"):
         done.append(("soccer", _step("soccer sync", soccer_sync, back_days=1, ahead_days=1)))
+    done.append(("combos", _step("combos", combos_cmd)))
     _dump({"job": "scores", "in_progress": live, "synced": dict(done)})
 
 

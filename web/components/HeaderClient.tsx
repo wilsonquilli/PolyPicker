@@ -5,8 +5,9 @@ import { usePathname, useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import { useLang, useSwitchLanguage, useT } from "@/components/i18n";
+import { LeagueFlag } from "@/components/LeagueFlag";
 import { SPORTS } from "@/lib/sports";
-import { LEAGUE_SLUGS, REGIONS, SOCCER_LEAGUES, soccerSlugOf } from "@/lib/soccer";
+import { LEAGUE_SLUGS, REGIONS, SOCCER_LEAGUES, soccerSlugOf, type LeagueSlug } from "@/lib/soccer";
 
 const NBA_SECTIONS = [
   { href: "/nba", view: "today", label: "Today" },
@@ -57,7 +58,7 @@ function LeaguePicker({ current }: { current: string | null }) {
           setOpen((o) => !o);
         }}
         className={`${pill(true)} ring-1 ring-line`}>
-        {lg ? <><span aria-hidden>{lg.flag}</span>{lg.name}</> : t("All competitions")}
+        {lg ? <><LeagueFlag slug={lg.slug as LeagueSlug} />{lg.name}</> : t("All competitions")}
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden><path d="m6 9 6 6 6-6" /></svg>
       </button>
       {open && (
@@ -70,7 +71,7 @@ function LeaguePicker({ current }: { current: string | null }) {
               {LEAGUE_SLUGS.filter((s) => SOCCER_LEAGUES[s].region === region).map((s) => (
                 <Link key={s} role="menuitem" href={`/soccer/${s}`} aria-current={s === current ? "page" : undefined}
                   className={`flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm ${s === current ? "bg-surface-2 font-semibold text-ink" : "text-muted hover:bg-surface-2 hover:text-ink"}`}>
-                  <span aria-hidden className="w-5 text-center">{SOCCER_LEAGUES[s].flag}</span>{SOCCER_LEAGUES[s].name}
+                  <span className="flex w-5 justify-center"><LeagueFlag slug={s} /></span>{SOCCER_LEAGUES[s].name}
                   <span className="ml-auto text-[11px] text-faint">{t(SOCCER_LEAGUES[s].country)}</span>
                 </Link>
               ))}

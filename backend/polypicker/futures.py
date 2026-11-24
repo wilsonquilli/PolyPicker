@@ -297,7 +297,7 @@ def simulate_nfl(engine: Engine, n: int = N_SIMS, seed: int = 11) -> dict:
     wins = np.tile(w0 + 0.5 * t0, (n, 1))
     for p in preds:
         h, a = ix[p["home_team_id"]], ix[p["away_team_id"]]
-        hw = rng.random(n) < norm.cdf((p["mu_margin"] + shock[:, h] - shock[:, a]) / sigma)
+        hw = rng.random(n) < norm.cdf((p["mu_margin"] + shock[:, h] - shock[:, a]) / p.get("sigma_win", sigma))
         wins[:, h] += hw; wins[:, a] += ~hw
     key = wins + rng.random(wins.shape) * 0.5
     strength = rating[None, :] + shock

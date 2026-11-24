@@ -129,3 +129,22 @@ class SoccerPredictionOutcome(Base):
     log_loss: Mapped[float | None] = mapped_column(Float)
     abs_error: Mapped[float | None] = mapped_column(Float)
     graded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class SoccerOdds(ProvenanceMixin, Base):
+    """Full-time result (1X2) and total-goals line per match from ESPN's odds feed: the median across every
+    pre-match sportsbook ESPN lists (in-play "Live Odds" feeds and settled prices are skipped). Probabilities have
+    the bookmaker margin removed. Closing line once the match kicks off; current line before."""
+    __tablename__ = "soccer_odds"
+    game_id: Mapped[int] = mapped_column(ForeignKey("soccer_games.game_id"), primary_key=True)
+    competition: Mapped[str] = mapped_column(String(32))
+    providers: Mapped[str] = mapped_column(String(200))          # books used, comma-separated
+    n_books: Mapped[int] = mapped_column(SmallInteger)
+    p_home: Mapped[float] = mapped_column(Float)
+    p_draw: Mapped[float] = mapped_column(Float)
+    p_away: Mapped[float] = mapped_column(Float)
+    total_line: Mapped[float | None] = mapped_column(Float)      # usually 2.5
+    p_over: Mapped[float | None] = mapped_column(Float)          # P(total > total_line), margin removed
+    is_closing: Mapped[bool] = mapped_column(Boolean, default=False)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+

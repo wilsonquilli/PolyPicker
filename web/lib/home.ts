@@ -32,6 +32,11 @@ export interface MarketSide {
 
 export type PickKey = "home" | "away" | "draw";
 
+/** Combo grader leg key (the API's `sport-gameid-pick`); plain module so server components can call it. */
+export type Sport = "nba" | "nfl" | "soccer";
+export const legKey = (league: LeagueKey, gameId: number, pick: PickKey) =>
+  `${isSoccer({ league }) ? "soccer" : league}-${gameId}-${pick}`;
+
 export interface Market {
   key: string;
   league: LeagueKey;

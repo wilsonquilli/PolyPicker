@@ -496,3 +496,31 @@ class FuturesForecast(Base):
     payload: Mapped[dict] = mapped_column(JSONB)
     generated_at: Mapped[datetime] = _now()
     __table_args__ = (Index("ix_futures_comp_time", "competition", "generated_at"),)
+
+
+# ---------------------------------------------------------------- combos (home page multi-leg picks)
+
+class Combo(Base):
+    """A combo shown on the home page: built from forecasts before its first leg starts, then frozen and graded.
+
+    One "slot" per (sport, kind, n_legs). While no leg has started, each rebuild replaces the slot's open combo; once
+    a leg starts it is locked and graded leg by leg (``legs[i].result``); a new combo for the slot is built after it
+    is lost or settled. ``status``: open | live | won | lost | void."""
+    __tablename__ = "combos"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    sport: Mapped[str] = mapped_column(String(16))            # nba | nfl | soccer
+    kind: Mapped[str] = mapped_column(String(8))              # safe | risky
+    n_legs: Mapped[int] = mapped_column(SmallInteger)
+    status: Mapped[str] = mapped_column(String(8))
+    legs: Mapped[list] = mapped_column(JSONB)
+    p_model: Mapped[float] = mapped_column(Float)
+    p_market: Mapped[float | None] = mapped_column(Float)
+    payout: Mapped[float] = mapped_column(Float)
+    payout_basis: Mapped[str] = mapped_column(String(8))      # market | model
+    edge: Mapped[float | None] = mapped_column(Float)
+    first_tipoff: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    last_tipoff: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    settled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))   # every leg resolved
+    created_at: Mapped[datetime] = _now()
+    updated_at: Mapped[datetime] = _now()
+    __table_args__ = (Index("ix_combos_slot", "sport", "kind", "n_legs", "created_at"),)
