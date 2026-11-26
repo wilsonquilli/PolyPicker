@@ -50,6 +50,35 @@ def test_predictions_are_immutable(client):
         c.rollback()
 
 
+def test_compaction_flag_never_allows_updates(client):
+    from polypicker.db.session import owner_engine
+    with owner_engine().connect() as c:
+        pid = c.execute(text("SELECT id FROM predictions LIMIT 1")).scalar()
+        if pid is None:
+            pytest.skip("no predictions yet")
+        c.execute(text("SET LOCAL polypicker.compacting = 'on'"))
+        with pytest.raises(DBAPIError, match="immutable"):
+            c.execute(text("UPDATE predictions SET probability = probability WHERE id = :i"), {"i": pid})
+        c.rollback()
+
+
+@pytest.mark.parametrize("sport", ["nba", "nfl", "soccer"])
+def test_compaction_keeps_latest_revision_and_trail(client, sport):
+    """Run compaction inside a rolled-back transaction: latest revisions and win-probability rows are untouched."""
+    from polypicker.compact import SPORTS, compact_conn
+    from polypicker.db.session import owner_engine
+    pred, _, _, keep = SPORTS[sport]
+    latest = f"""SELECT count(*) FROM {pred} p JOIN (SELECT game_id, kind, max(revision) r FROM {pred} GROUP BY 1, 2) l
+                 ON l.game_id = p.game_id AND l.kind = p.kind AND l.r = p.revision"""
+    trail = f"SELECT count(*) FROM {pred} WHERE market = ANY(:k)"
+    with owner_engine().connect() as c:
+        before = c.execute(text(latest)).scalar(), c.execute(text(trail), {"k": list(keep)}).scalar()
+        compact_conn(c, sport)
+        after = c.execute(text(latest)).scalar(), c.execute(text(trail), {"k": list(keep)}).scalar()
+        c.rollback()
+    assert before == after
+
+
 def test_games_listing_and_detail(client):
     r = client.get("/api/v1/games", params={"season": 2025, "status": "final", "limit": 5})
     assert r.status_code == 200
@@ -95,3 +124,28 @@ def test_validation_errors_use_consistent_format(client):
     assert r.status_code == 422 and r.json()["error"]["code"] == "invalid_request"
     r = client.get("/api/v1/games/1")
     assert r.status_code == 404 and r.json()["error"]["code"] == "not_found"
+
+
+def test_archived_season_keeps_performance_identical(client):
+    """Archive this season's NFL player props inside a rolled-back transaction: accuracy output must not change."""
+    from polypicker.api.routers import nfl
+    from polypicker.archive import _json, season_stats
+    from polypicker.db.session import owner_engine
+    perf = nfl.model_performance.__wrapped__
+    with owner_engine().connect() as c:
+        season = c.execute(text("SELECT max(g.season) FROM nfl_predictions p JOIN nfl_games g USING (game_id) "
+                                "WHERE p.market LIKE 'player%'")).scalar()
+        if season is None:
+            pytest.skip("no NFL player props")
+        before = perf(kind=None, season=None, category=None, conn=c)["data"]["markets"]
+        c.execute(text("SET LOCAL polypicker.compacting = 'on'"))
+        for (kind, market), s in season_stats(c, "nfl", season).items():
+            c.execute(text("INSERT INTO archived_prediction_stats (sport, kind, season, market, stats, rows_archived) "
+                           "VALUES ('nfl', :k, :s, :m, CAST(:j AS jsonb), 0)"), {"k": kind, "s": season, "m": market, "j": _json(s)})
+        ids = ("SELECT p.id FROM nfl_predictions p JOIN nfl_games g USING (game_id) "
+               "WHERE g.season = :s AND p.market LIKE 'player\\_%'")
+        c.execute(text(f"DELETE FROM nfl_prediction_outcomes WHERE prediction_id IN ({ids})"), {"s": season})
+        c.execute(text(f"DELETE FROM nfl_predictions WHERE id IN ({ids})"), {"s": season})
+        after = perf(kind=None, season=None, category=None, conn=c)["data"]["markets"]
+        c.rollback()
+    assert before == after

@@ -641,6 +641,9 @@ def model_performance(kind: Kind | None = None, season: int | None = None, categ
         FROM nfl_games g WHERE g.status = 'final' AND g.home_score <> g.away_score AND g.market_spread_home IS NOT NULL
           AND g.market_spread_home <> 0 AND g.game_id IN (
             SELECT p.game_id {base} AND p.market = 'moneyline' AND o.graded_state = 'final')""", **params)
+    # Player props of finished seasons live in archived_prediction_stats (polypicker/archive.py): fold them back in.
+    from polypicker.archive import merge as merge_archived
+    states, prob, mae, calib = merge_archived(conn, "nfl", kind, season, params.get("m"), states, prob, mae, calib)
     active = q(conn, """SELECT id, target, version, algorithm, train_start, train_end, validation_start, validation_end,
                                metrics, trained_at FROM models WHERE is_active AND target LIKE 'nfl_%' ORDER BY target""")
     by: dict[str, dict] = {}

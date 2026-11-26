@@ -1,0 +1,125 @@
+# PolyPicker scheduled jobs (replaces launchd on the Mac). They run against Supabase with the owner connection.
+# Schedules are UTC; times below are US Eastern (EST, UTC-5; during EDT everything runs an hour later locally).
+# GitHub may start scheduled runs a few minutes late.
+#
+# Repository secrets (Settings -> Secrets and variables -> Actions):
+#   DATABASE_URL       Supabase session pooler URL as the `postgres` user (required)
+#   ODDS_API_KEY       the-odds-api.com key (optional)
+#   ALERT_WEBHOOK_URL  ntfy.sh topic / Discord / Slack webhook for job-failure alerts (optional, recommended)
+#   FOOTBALL_DATA_API_KEY  football-data.org key (optional)
+# Repository variable (same page, Variables tab):
+#   API_PUBLIC_URL     the Render API URL, e.g. https://polypicker-api.onrender.com: pinged by the scores loop so the
+#                      free instance doesn't fall asleep (a cold start takes ~1 minute) while people are browsing
+name: jobs
+
+on:
+  schedule:
+    - cron: "0 11 * * *"        # run-all  06:00 ET
+    - cron: "0 18 * * *"        # run-all  13:00 ET
+    - cron: "0,30 22-23 * * *"  # refresh  17:00-18:30 ET
+    - cron: "0,30 0-3 * * *"    # refresh  19:00-22:30 ET
+    - cron: "2 12 * * *"        # scores   07:02-12:50 ET (European football mornings)
+    - cron: "2 18 * * *"        # scores   13:02-18:50 ET
+    - cron: "2 0 * * *"         # scores   19:02-00:50 ET (NBA / NFL nights)
+  workflow_dispatch:
+    inputs:
+      job:
+        description: Job to run now
+        type: choice
+        options: [run-all, refresh, scores-once, compact, archive]
+        default: run-all
+
+permissions:
+  contents: write   # archive step publishes finished seasons' Parquet files as a GitHub release
+  actions: write    # keep-alive: re-enable this workflow (GitHub pauses schedules after 60 days without commits)
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    concurrency:
+      # one run of each job at a time; a new scores loop never overlaps the previous one
+      group: ${{ github.workflow }}-${{ github.event.schedule || inputs.job }}
+      cancel-in-progress: false
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      API_DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+      ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
+      FOOTBALL_DATA_API_KEY: ${{ secrets.FOOTBALL_DATA_API_KEY }}
+      ALERT_DESKTOP: "false"
+      PP_JOB_RUN: "1"
+      PYTHONUNBUFFERED: "1"
+      GH_TOKEN: ${{ github.token }}
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - name: Pick the job
+        id: pick
+        working-directory: .
+        run: |
+          case "${{ github.event.schedule }}" in
+            "0 11 * * *"|"0 18 * * *") job=run-all ;;
+            "0,30 22-23 * * *"|"0,30 0-3 * * *") job=refresh ;;
+            "2 12 * * *"|"2 18 * * *"|"2 0 * * *") job=scores-loop ;;
+            *) job="${{ inputs.job }}" ;;
+          esac
+          echo "job=$job" >> "$GITHUB_OUTPUT"
+          echo "Running: $job"
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: backend/pyproject.toml
+
+      - name: Install
+        run: pip install .
+
+      - name: run-all
+        if: steps.pick.outputs.job == 'run-all'
+        run: polypicker run-all
+
+      - name: refresh
+        if: steps.pick.outputs.job == 'refresh'
+        run: polypicker refresh
+
+      - name: scores (once)
+        if: steps.pick.outputs.job == 'scores-once'
+        run: polypicker scores
+
+      - name: scores (every 3 minutes for ~5h50)
+        if: steps.pick.outputs.job == 'scores-loop'
+        run: |
+          end=$((SECONDS + 350 * 60 - 300))
+          while [ $SECONDS -lt $end ]; do
+            polypicker scores > /tmp/scores.log 2>&1 || { echo "scores failed:"; tail -20 /tmp/scores.log; }
+            if [ -n "${{ vars.API_PUBLIC_URL }}" ]; then curl -fsS -m 90 -o /dev/null "${{ vars.API_PUBLIC_URL }}/api/v1/health" || echo "API ping failed"; fi
+            sleep 180
+          done
+
+      - name: compact
+        if: steps.pick.outputs.job == 'compact'
+        run: polypicker compact
+
+      - name: archive
+        if: steps.pick.outputs.job == 'archive'
+        run: polypicker archive
+
+      - name: Publish archived seasons
+        if: always() && (steps.pick.outputs.job == 'run-all' || steps.pick.outputs.job == 'archive')
+        run: |
+          shopt -s nullglob
+          files=(archive/*.parquet)
+          if [ ${#files[@]} -gt 0 ]; then
+            tag="archive-$(date -u +%Y%m%d-%H%M)"
+            gh release create "$tag" "${files[@]}" --title "Archived player-prop forecasts ($tag)" \
+              --notes "Season archives written by polypicker archive. Accuracy sums stay in archived_prediction_stats."
+          fi
+
+      - name: Keep the schedule alive
+        if: always() && steps.pick.outputs.job == 'run-all'
+        run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/jobs.yml/enable" || true

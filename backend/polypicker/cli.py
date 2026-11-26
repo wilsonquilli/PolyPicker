@@ -713,6 +713,26 @@ def combos_cmd() -> None:
         _dump(refresh_combos(conn))
 
 
+@app.command("archive")
+def archive_cmd(sport: str | None = typer.Option(None, help="nba or nfl (default: every finished season of both)"),
+                season: int | None = typer.Option(None, help="Season start year, e.g. 2025"),
+                dry_run: bool = typer.Option(False, "--dry-run", help="Only report what would be archived")) -> None:
+    """Archive finished seasons' player-prop forecasts: Parquet export + accuracy sums kept, rows removed."""
+    from polypicker.archive import archive_ready, archive_season
+    out = get_settings().archive_dir
+    if sport and season:
+        _dump(archive_season(owner_engine(), sport, season, out, dry_run=dry_run))
+    else:
+        _dump(archive_ready(owner_engine(), out, dry_run=dry_run))
+
+
+@app.command("compact")
+def compact_cmd(dry_run: bool = typer.Option(False, "--dry-run", help="Only count what would be removed")) -> None:
+    """Remove superseded forecast revisions of finished, graded games (latest revision + win-probability trail kept)."""
+    from polypicker.compact import compact
+    _dump(compact(owner_engine(), dry_run=dry_run))
+
+
 def _sport_pipeline(sport: str, full: bool | None) -> None:
     """One sport's part of run-all (runs in its own process): daily pipeline, then its championship sims, which
     only need that sport's fresh results and forecasts."""
@@ -744,8 +764,11 @@ def run_all(full: bool | None = typer.Option(None, "--full/--quick", help="Force
     # New clubs (season start, cup draws) get their logo; existing ones are never re-downloaded.
     ok["logos"] = _step("soccer logos", soccer_logos, refresh=False)
     ok["combos"] = _step("combos", combos_cmd)
+    # After grading: drop superseded revisions of finished games (keeps the hosted database small).
+    ok["compact"] = _step("compact", compact_cmd, dry_run=False)
+    ok["archive"] = _step("archive", archive_cmd, sport=None, season=None, dry_run=False)   # no-op until a season ends
     _dump({"job": "run-all", "ok": ok})
-    optional = {"nfl_extras", "weather"}   # supplementary feeds: a failure is logged, not a failed job
+    optional = {"nfl_extras", "weather", "compact", "archive"}   # supplementary: a failure is logged, not a failed job
     _job_end(run, "run-all", ok, frozenset(optional))
     if not all(v for k, v in ok.items() if k not in optional):
         raise typer.Exit(1)

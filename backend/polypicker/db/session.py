@@ -15,7 +15,8 @@ def owner_engine() -> Engine:
 @lru_cache
 def api_engine() -> Engine:
     """SELECT-only engine for the public API (FR-11.2)."""
-    return create_engine(get_settings().api_database_url, pool_pre_ping=True, pool_size=10)
+    return create_engine(get_settings().api_database_url, pool_pre_ping=True,
+                         pool_size=get_settings().api_pool_size, max_overflow=get_settings().api_max_overflow)
 
 
 def owner_session() -> Session:

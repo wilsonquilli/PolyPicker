@@ -8,9 +8,14 @@ import polypicker.soccer.models  # noqa: F401  (soccer tables)
 import polypicker.weather  # noqa: F401  (weather tables)
 import polypicker.alerts  # noqa: F401  (job_alerts)
 
+# Snapshots are never updated. The only delete allowed is storage compaction of superseded revisions of finished
+# games (polypicker/compact.py), which opts in per transaction with SET LOCAL polypicker.compacting = 'on'.
 _IMMUTABLE_FN = """
 CREATE OR REPLACE FUNCTION polypicker_reject_change() RETURNS trigger AS $$
 BEGIN
+  IF TG_OP = 'DELETE' AND current_setting('polypicker.compacting', true) = 'on' THEN
+    RETURN OLD;
+  END IF;
   RAISE EXCEPTION 'predictions are immutable snapshots (FR-09.6); write a new revision instead';
 END;
 $$ LANGUAGE plpgsql;
@@ -108,6 +113,8 @@ def create_all(engine: Engine) -> None:
         conn.execute(text(_IMMUTABLE_TRIGGER))
         conn.execute(text(_SEED_SOURCES))
         conn.execute(text(_SOCCER_COLUMNS))
+        from polypicker.archive import DDL as ARCHIVE_DDL
+        conn.execute(text(ARCHIVE_DDL))
         # Tables may predate the default-privileges grant; make sure the API role can read them.
         conn.execute(text("""
             DO $$ BEGIN
@@ -122,4 +129,5 @@ def drop_all(engine: Engine) -> None:
         conn.execute(text("DROP TRIGGER IF EXISTS predictions_immutable ON predictions"))
         conn.execute(text("DROP TRIGGER IF EXISTS nfl_predictions_immutable ON nfl_predictions"))
         conn.execute(text("DROP TRIGGER IF EXISTS soccer_predictions_immutable ON soccer_predictions"))
+        conn.execute(text("DROP TABLE IF EXISTS archived_prediction_stats"))
     Base.metadata.drop_all(engine)

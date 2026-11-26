@@ -1,0 +1,24 @@
+# Render Blueprint: the read-only PolyPicker API (free web service). The database is Supabase; the scheduled
+# jobs run on GitHub Actions (.github/workflows/jobs.yml). Secrets are entered in the Render dashboard (sync: false).
+services:
+  - type: web
+    name: polypicker-api
+    runtime: python
+    plan: free
+    region: virginia            # same area as Supabase us-east-1 and Vercel iad1
+    rootDir: backend
+    buildCommand: pip install .
+    startCommand: uvicorn polypicker.api.main:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips='*'
+    healthCheckPath: /api/v1/health
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.13"
+      - key: API_DATABASE_URL     # Supabase session pooler URL for the read-only polypicker_api role
+        sync: false
+      - key: CORS_ORIGINS         # e.g. https://polypicker.vercel.app (the web app proxies /api/v1, so this is a fallback)
+        sync: false
+      - key: API_POOL_SIZE
+        value: "4"
+      - key: API_MAX_OVERFLOW
+        value: "2"
