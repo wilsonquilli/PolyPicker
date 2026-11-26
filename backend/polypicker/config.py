@@ -1,6 +1,7 @@
 from functools import lru_cache
 from pathlib import Path
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
@@ -17,7 +18,21 @@ class Settings(BaseSettings):
     nfl_first_season: int = 2018  # NFL teams play 17 games a season, so models need several seasons
     soccer_first_season: int = 2010  # Premier League history from 2010-11 (first season only seeds ratings)
     football_data_api_key: str | None = None  # football-data.org free key (optional backup source)
+    odds_api_key: str | None = None  # the-odds-api.com key: Pinnacle + US books for NBA (free plan: 500 calls/month)
     cors_origins: str = "http://localhost:3000"
+    # Job-failure alerts (polypicker/alerts.py): a webhook (ntfy.sh topic URL, Discord or Slack webhook) and/or a
+    # macOS desktop notification.
+    alert_webhook_url: str | None = None
+    alert_desktop: bool = True
+
+    @field_validator("database_url", "api_database_url")
+    @classmethod
+    def _psycopg_driver(cls, v: str) -> str:
+        """Hosts (Render, Heroku-style) hand out postgres:// or postgresql:// URLs; SQLAlchemy needs the psycopg 3 driver."""
+        for prefix in ("postgres://", "postgresql://"):
+            if v.startswith(prefix):
+                return "postgresql+psycopg://" + v[len(prefix):]
+        return v
 
     def resolved_data_dir(self) -> Path:
         p = self.data_dir

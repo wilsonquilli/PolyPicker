@@ -1,7 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
-
 import { StatBars } from "@/components/charts";
 import { Breadcrumbs, Card, SectionTitle, Skeleton, StatTile, TeamBadge } from "@/components/ui";
 import { api } from "@/lib/api";

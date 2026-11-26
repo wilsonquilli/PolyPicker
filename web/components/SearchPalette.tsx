@@ -4,17 +4,11 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
-
 import { useT } from "@/components/i18n";
 import { LeagueFlag } from "@/components/LeagueFlag";
 import { TeamBadge } from "@/components/ui";
 import { teamCss, SOCCER_LEAGUES, LEAGUE_SLUGS, type LeagueSlug } from "@/lib/soccer";
 
-/**
- * One search across every sport and competition (`GET /search/all`), as a command palette: the header bar on
- * desktop, a search icon on phones, or ⌘K / Ctrl+K / "/" anywhere. Results are grouped by sport; before typing it
- * shows recent picks and quick links. Keyboard: ↑ ↓ to move, Enter to open, Esc to close.
- */
 const API = process.env.NEXT_PUBLIC_API_URL ?? "/api/v1";
 const RECENT_KEY = "pp-recent-search";
 
@@ -22,7 +16,6 @@ type Sport = "nba" | "nfl" | "soccer";
 interface Result { sport: Sport; type: "team" | "player"; id: string; name: string; abbr: string | null; subtitle: string | null;
   href: string; color?: string | null; league?: LeagueSlug }
 
-// Open state shared by the triggers (header bar, phone icon) and the single dialog.
 let open = false;
 const listeners = new Set<() => void>();
 const setOpen = (v: boolean) => { open = v; listeners.forEach((l) => l()); };
@@ -44,7 +37,6 @@ const SearchIcon = ({ size = 16 }: { size?: number }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></svg>
 );
 
-/** Desktop: looks like a search field. Phone: an icon button. Both open the palette. */
 export function SearchTrigger({ variant }: { variant: "bar" | "icon" }) {
   const t = useT();
   if (variant === "icon") {
@@ -66,7 +58,6 @@ export function SearchTrigger({ variant }: { variant: "bar" | "icon" }) {
 
 export function SearchPalette() {
   const isOpen = useOpen();
-  // Global shortcuts: ⌘K / Ctrl+K anywhere, "/" when not typing.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const typing = ["INPUT", "TEXTAREA", "SELECT"].includes((document.activeElement as HTMLElement)?.tagName);
@@ -78,8 +69,6 @@ export function SearchPalette() {
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, []);
-  // Mounted fresh on every open, so the query, results and recent list start clean. Rendered into <body>: inside
-  // the sticky header (backdrop-filter) a fixed overlay would be positioned relative to the header, not the screen.
   return isOpen ? createPortal(<Palette />, document.body) : null;
 }
 
@@ -93,7 +82,6 @@ function Palette() {
   const inputRef = useRef<HTMLInputElement>(null);
   const listId = useId();
 
-  // Focus the input and lock page scroll while open.
   useEffect(() => {
     const id = requestAnimationFrame(() => inputRef.current?.focus());
     const prev = document.body.style.overflow;

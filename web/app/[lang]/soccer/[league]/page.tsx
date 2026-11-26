@@ -1,6 +1,5 @@
 import Link from "next/link";
 import { Suspense } from "react";
-
 import { GameCardSkeleton } from "@/components/GameCard";
 import { MatchCard, SoccerBadge } from "@/components/soccer/MatchCard";
 import { Card, EmptyState, Pill, TriBar } from "@/components/ui";
@@ -41,7 +40,6 @@ async function Matches({ params, searchParams }: { params: Params; searchParams:
   const today = String(datesRes.meta.extra?.today);
   const season = String(datesRes.meta.extra?.season_label ?? "");
   const dates = datesRes.data;
-  // Open on the next date that still has matches to play (today's slate may already be finished).
   const nextDate = dates.find((d) => d.date >= today && d.scheduled > 0)?.date ?? dates[dates.length - 1]?.date ?? today;
   const date = typeof sp.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(sp.date) ? sp.date : nextDate;
 

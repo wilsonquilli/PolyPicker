@@ -7,6 +7,7 @@ import { CalibrationChart } from "@/components/charts";
 import { EmptyState, SectionTitle, Skeleton, StatTile } from "@/components/ui";
 import { api } from "@/lib/api";
 import { soccerLeague, type SoccerLeague } from "@/lib/soccer";
+import { LineMovement } from "@/components/LineMovement";
 import { getT } from "@/lib/i18n/server";
 
 type LParams = Promise<{ league: string }>;
@@ -19,7 +20,8 @@ type SP = Promise<{ [k: string]: string | string[] | undefined }>;
 type Bin = { bucket: number; n: number; mean_predicted: number; observed_rate: number };
 type Three = { n: number; rps: number; log_loss: number; brier: number; accuracy: number };
 interface Perf {
-  match_result: { n: number; accuracy: number; rps: number; log_loss: number; mean_draw: number; draw_rate: number; home_rate: number } | null;
+  match_result: { n: number; accuracy: number; rps: number; log_loss: number; mean_draw: number; draw_rate: number; home_rate: number;
+    strong_n: number; strong_accuracy: number | null; strong_threshold: number; dnb_n: number; dnb_accuracy: number | null; dc_accuracy: number } | null;
   calibration: Record<string, Bin[]>;
   lines: { market: string; threshold: number | null; n: number; mean_predicted: number; hit_rate: number; brier: number }[];
   mae: Record<string, { n: number; value: number }>;
@@ -63,14 +65,35 @@ async function Accuracy({ lg, searchParams }: { lg: SoccerLeague; searchParams: 
       <KindNote kind={kind} unit="match" />
       {!mr ? <EmptyState title={t("Nothing graded yet")}>{kind === "live" ? t("Live accuracy builds up as published forecasts are graded after each match.") : t("No backtest results.")}</EmptyState> : (
         <>
-          <AccuracyHero n={mr.n} value={mr.accuracy} unit="match"
-            title={t("Called the right result in {w} of {n} matches", { w: Math.round(mr.accuracy * mr.n).toLocaleString(), n: mr.n.toLocaleString() })}
-            sub={t("The result we rated most likely (home win, draw or away win) happened {p} of the time. Soccer has three possible results, so this is harder than it sounds. How that compares:", { p: `${(mr.accuracy * 100).toFixed(1)}%` })}
-            rows={[
-              { label: t("PolyPicker model"), value: mr.accuracy, ours: true },
-              { label: t("Always pick the home team"), value: mr.home_rate },
-              { label: t("Random guess"), value: 1 / 3 },
-            ]} />
+          {mr.strong_n > 0 && mr.strong_accuracy !== null ? (
+            <AccuracyHero n={mr.strong_n} value={mr.strong_accuracy} unit="match"
+              title={t("Strong picks: right in {w} of {n} matches", { w: Math.round(mr.strong_accuracy * mr.strong_n).toLocaleString(), n: mr.strong_n.toLocaleString() })}
+              sub={t("We only make a strong pick when one result is rated at least {t} likely ({n} of {m} matches). The rest are close to a coin flip. How that compares:", {
+                t: `${Math.round(mr.strong_threshold * 100)}%`, n: mr.strong_n.toLocaleString(), m: mr.n.toLocaleString() })}
+              rows={[
+                { label: t("Strong picks"), value: mr.strong_accuracy, ours: true },
+                { label: t("All matches (every pick)"), value: mr.accuracy, sub: t("{n} matches", { n: mr.n.toLocaleString() }) },
+                { label: t("Always pick the home team"), value: mr.home_rate },
+                { label: t("Random guess"), value: 1 / 3 },
+              ]} />
+          ) : (
+            <AccuracyHero n={mr.n} value={mr.accuracy} unit="match"
+              title={t("Called the right result in {w} of {n} matches", { w: Math.round(mr.accuracy * mr.n).toLocaleString(), n: mr.n.toLocaleString() })}
+              sub={t("The result we rated most likely (home win, draw or away win) happened {p} of the time. Soccer has three possible results, so this is harder than it sounds. How that compares:", { p: `${(mr.accuracy * 100).toFixed(1)}%` })}
+              rows={[
+                { label: t("PolyPicker model"), value: mr.accuracy, ours: true },
+                { label: t("Always pick the home team"), value: mr.home_rate },
+                { label: t("Random guess"), value: 1 / 3 },
+              ]} />
+          )}
+          <div>
+            <SectionTitle>{t("Safer picks")}</SectionTitle>
+            <div className="tabular grid grid-cols-1 gap-2 sm:grid-cols-2">
+              <StatTile label={t("Double chance: favourite or draw")} value={`${(mr.dc_accuracy * 100).toFixed(1)}%`} sub={t("{n} matches", { n: mr.n.toLocaleString() })} />
+              {mr.dnb_accuracy !== null && <StatTile label={t("Draw no bet: favourite (draws void)")} value={`${(mr.dnb_accuracy * 100).toFixed(1)}%`} sub={t("{n} matches without a draw", { n: mr.dnb_n.toLocaleString() })} />}
+            </div>
+            <p className="mt-2 text-xs text-muted">{t("Two lower-risk ways to back the same forecast, graded on the same matches.")}</p>
+          </div>
           <p className="-mt-2 text-sm text-muted">{t("Draws are the hardest result to call: we expected a draw in {a}% of matches on average, and {b}% ended level.", { a: (mr.mean_draw * 100).toFixed(0), b: (mr.draw_rate * 100).toFixed(0) })}</p>
           <CalibrationCard label={t("Home / draw / away")}
             bins={mergeBins(["match_result:home", "match_result:draw", "match_result:away"].map((k) => perf?.calibration[k] ?? []))}
@@ -91,6 +114,7 @@ async function Accuracy({ lg, searchParams }: { lg: SoccerLeague; searchParams: 
                 </div>
               </>
             )} />
+          <Suspense fallback={<Skeleton className="h-64" />}><LineMovement base={lg.api} kind={kind} unit="match" /></Suspense>
           <details className="rounded-2xl border border-line bg-surface shadow-card">
             <summary className="cursor-pointer px-5 py-4 font-semibold">{t("Advanced stats: goal lines & training validation")}</summary>
             <div className="overflow-x-auto px-5 pb-5">

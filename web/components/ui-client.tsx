@@ -1,7 +1,6 @@
 "use client";
 
 import Link from "next/link";
-
 import { useT } from "@/components/i18n";
 import { keyed } from "@/lib/i18n";
 import { Pill, type PillTone } from "@/components/ui";
@@ -16,7 +15,6 @@ export function StatusPill({ status }: { status: string }) {
   return <Pill tone={tone}>{keyed(t, `status:${status}`, label)}</Pill>;
 }
 
-/** Two-segment probability bar. Widths encode probability; text labels carry the same info. */
 export function ProbBar({ home, homeAbbr, awayAbbr, height = 6 }: { home: number; homeAbbr: string; awayAbbr: string; height?: number }) {
   const h = Math.round(home * 1000) / 10;
   return (
@@ -33,7 +31,6 @@ export function ProbBar({ home, homeAbbr, awayAbbr, height = 6 }: { home: number
   );
 }
 
-/** Semi-circular "% chance" gauge. */
 export function Gauge({ p, label: label_ = "chance", size = 92 }: { p: number; label?: string; size?: number }) {
   const label = useT()(label_);
   const r = 40, c = Math.PI * r, val = Math.max(0, Math.min(1, p));
@@ -68,7 +65,6 @@ export function Breadcrumbs({ items }: { items: { href?: string; label: string }
 
 export function FormChips({ results }: { results: { result: "W" | "L" | "T" | "D"; opponent: string; home: boolean }[] }) {
   const t = useT();
-  // Spanish: G(anado) / E(mpate) / P(erdido)
   const letter = (r: string) => keyed(t, `form:${r}`, r);
   return (
     <div className="flex gap-1">
@@ -82,7 +78,6 @@ export function FormChips({ results }: { results: { result: "W" | "L" | "T" | "D
   );
 }
 
-/** Three-way probability bar (home / draw / away). Widths encode probability; text labels carry the same info. */
 export function TriBar({ home, draw, away, labels, height = 6 }: { home: number; draw: number; away: number; labels: [string, string]; height?: number }) {
   const t = useT();
   const top = Math.max(home, draw, away);

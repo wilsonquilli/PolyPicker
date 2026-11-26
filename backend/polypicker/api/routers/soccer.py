@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import Connection
 
 from polypicker.api.deps import cached, get_conn, q, q1, today_et
+from polypicker.api.freshness import stamp
 from polypicker.api.queries import meta
 from polypicker.config import DISCLAIMER
 from polypicker.soccer.leagues import BY_COMPETITION
@@ -134,11 +135,16 @@ def headlines(conn: Connection, ids: list[int]) -> dict[int, dict]:
         trio = {"home": h.get("p_home", 0), "draw": h.get("p_draw", 0), "away": h.get("p_away", 0)}
         h["pick"] = max(trio, key=trio.get)
         h["pick_probability"] = trio[h["pick"]]
+    comps = {r["game_id"]: r["competition"] for r in q(conn, "SELECT game_id, competition FROM soccer_games WHERE game_id = ANY(:ids)",
+                                                      ids=list(out))} if out else {}
+    stamp(out, "soccer", conn, comps)
     return out
 
 
 def summaries(conn: Connection, rows: list[dict]) -> list[dict]:
     teams, heads, recs = teams_by_id(conn), headlines(conn, [r["game_id"] for r in rows]), records_before(conn, rows)
+    from polypicker.api import reasons
+    why = reasons.soccer(conn, rows, heads)
     out = []
     for r in rows:
         def side(tid, score):
@@ -153,7 +159,8 @@ def summaries(conn: Connection, rows: list[dict]) -> list[dict]:
                                  if r.get("decided") == "pen" else None),
                     "tipoff_utc": r["kickoff_utc"], "game_date": r["game_date"], "status": r["status"],
                     "home": side(r["home_team_id"], r["home_score"]), "away": side(r["away_team_id"], r["away_score"]),
-                    "result": r["result"], "prediction": heads.get(r["game_id"])})
+                    "result": r["result"], "prediction": heads.get(r["game_id"]),
+                    "reasons": why.get(r["game_id"])})
     return out
 
 
@@ -513,6 +520,17 @@ def search(league: str, q_: str = Query(..., alias="q", min_length=2), limit: in
     return {"data": rows, "meta": _meta()}
 
 
+STRONG_PICK = 0.45   # a "strong pick": the most likely result is rated at least this likely
+
+
+@router.get("/line-movement")
+@cached(ttl=300)
+def line_movement_soccer(league: str, kind: str = Query("live", pattern="^(live|backtest)$"), conn: Connection = Depends(get_conn)):
+    """Opening -> closing line moves vs our picks (Pinnacle open/close; top-five leagues only)."""
+    from polypicker.api.linemove import line_movement
+    return {"data": line_movement(conn, "soccer", kind, _league(league)["competition"]), "meta": _meta()}
+
+
 @router.get("/models/performance")
 @cached(ttl=300)
 def performance(league: str, kind: str | None = None, season: int | None = None, conn: Connection = Depends(get_conn)):
@@ -540,8 +558,17 @@ def performance(league: str, kind: str | None = None, season: int | None = None,
                avg((power((ph) - (res = 'H')::int, 2) + power((ph + pd) - (res IN ('H','D'))::int, 2)) / 2) rps,
                avg(-ln(greatest(CASE res WHEN 'H' THEN ph WHEN 'D' THEN pd ELSE pa END, 1e-9))) log_loss,
                avg(pd) mean_draw, avg((res = 'D')::int) draw_rate, avg((res = 'H')::int) home_rate,
-               avg(CASE WHEN res = 'H' THEN 1.0 ELSE 0 END) home_win_rate
-        FROM x""", **params)
+               avg(CASE WHEN res = 'H' THEN 1.0 ELSE 0 END) home_win_rate,
+               -- strong picks only: the most likely result is rated >= STRONG_PICK (coin-flip matches get no pick)
+               count(*) FILTER (WHERE greatest(ph, pd, pa) >= :strong) strong_n,
+               avg(CASE WHEN (CASE WHEN ph >= pd AND ph >= pa THEN 'H' WHEN pa >= pd THEN 'A' ELSE 'D' END) = res THEN 1.0 ELSE 0 END)
+                   FILTER (WHERE greatest(ph, pd, pa) >= :strong) strong_accuracy,
+               -- draw no bet: the likelier of home / away; a draw voids the pick
+               count(*) FILTER (WHERE res <> 'D') dnb_n,
+               avg(CASE WHEN (CASE WHEN ph >= pa THEN 'H' ELSE 'A' END) = res THEN 1.0 ELSE 0 END) FILTER (WHERE res <> 'D') dnb_accuracy,
+               -- double chance: the likelier of home / away, or a draw
+               avg(CASE WHEN res = 'D' OR (CASE WHEN ph >= pa THEN 'H' ELSE 'A' END) = res THEN 1.0 ELSE 0 END) dc_accuracy
+        FROM x""", strong=STRONG_PICK, **params)
     calib = q(conn, f"""SELECT p.market, p.side, width_bucket(p.probability, 0, 1, 10) bucket, count(*) n,
                                avg(p.probability) mean_predicted, avg((o.outcome = 'hit')::int) observed_rate
                         {base} AND p.probability IS NOT NULL GROUP BY 1, 2, 3 ORDER BY 1, 2, 3""", **params)
@@ -557,7 +584,7 @@ def performance(league: str, kind: str | None = None, season: int | None = None,
         cal.setdefault(f"{r['market']}:{r['side'] or ''}", []).append(
             {"bucket": r["bucket"], "n": r["n"], "mean_predicted": float(r["mean_predicted"]), "observed_rate": float(r["observed_rate"])})
     f = lambda v, n=4: None if v is None else round(float(v), n)  # noqa: E731
-    return {"data": {"match_result": {k: (f(v) if k != "n" else v) for k, v in (trio or {}).items()} if trio and trio["n"] else None,
+    return {"data": {"match_result": {k: (f(v) if k not in ("n", "strong_n", "dnb_n") else v) for k, v in (trio or {}).items()} | {"strong_threshold": STRONG_PICK} if trio and trio["n"] else None,
                      "calibration": cal,
                      "lines": [{**r, "mean_predicted": f(r["mean_predicted"]), "hit_rate": f(r["hit_rate"]), "brier": f(r["brier"])} for r in lines],
                      "mae": {r["market"]: {"n": r["n"], "value": f(r["mae"], 3)} for r in mae},

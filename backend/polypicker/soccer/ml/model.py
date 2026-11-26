@@ -53,6 +53,8 @@ def design(matchups: pl.DataFrame, games: pl.DataFrame, market: pl.DataFrame | N
         pl.when(pl.col("is_home")).then("home_score").otherwise("away_score").alias("y_goals"))
     if market is None or market.is_empty():
         return out.with_columns(pl.lit(None, pl.Float64).alias("mkt_log_xg"), pl.lit(None, pl.Float64).alias("opp_mkt_log_xg"))
+    if "mkt_p_home" not in market.columns:
+        market = market.with_columns(*[pl.lit(None, pl.Float64).alias(c) for c in ("mkt_p_home", "mkt_p_draw", "mkt_p_away")])
     own = pl.when(pl.col("is_home")).then("mkt_xg_home").otherwise("mkt_xg_away")
     opp = pl.when(pl.col("is_home")).then("mkt_xg_away").otherwise("mkt_xg_home")
     return (out.join(market, on="game_id", how="left")
@@ -259,10 +261,31 @@ class MarketAwareSoccerModel:
 
     def predict_games(self, rows: pl.DataFrame) -> list[dict]:
         if self.market is None or not all(c in rows.columns for c in MARKET):
-            return [{**g, "uses_market": False} for g in self.base.predict_games(rows)]
+            return _use_market_1x2([{**g, "uses_market": False} for g in self.base.predict_games(rows)], rows)
         ok = _ids_with_market(rows).implode()
         with_m, without = rows.filter(pl.col("game_id").is_in(ok)), rows.filter(~pl.col("game_id").is_in(ok))
         out = [{**g, "uses_market": True} for g in self.market.predict_games(with_m)] if with_m.height else []
         out += [{**g, "uses_market": False} for g in self.base.predict_games(without)] if without.height else []
+        return _use_market_1x2(out, rows)
+
+
+def _use_market_1x2(out: list[dict], rows: pl.DataFrame) -> list[dict]:
+    """Home / draw / away = the bookmakers' vig-free consensus wherever it exists (2026-11-24).
+
+    Every input tested on top of the odds -- our ratings and shot stats, a stacked model, gradient boosting,
+    confirmed starting XIs (ESPN lineups), draw-specific rules -- matched or trailed the odds' own pick on the
+    2025 and 2026 seasons (market 53.5% / 54.8% over all competitions; the closing odds already price lineups
+    and form), while our Poisson-on-market route trailed it in LaLiga, Ligue 1, the Bundesliga and the Europa
+    League. Goals, scorelines, totals and BTTS still come from the Poisson grid."""
+    if "mkt_p_home" not in rows.columns:
         return out
+    m = {r[0]: r[1:] for r in rows.filter(pl.col("is_home") & pl.col("mkt_p_home").is_not_null()
+                                         & pl.col("mkt_p_draw").is_not_null() & pl.col("mkt_p_away").is_not_null())
+         .select("game_id", "mkt_p_home", "mkt_p_draw", "mkt_p_away").iter_rows()}
+    for g in out:
+        if g["game_id"] in m:
+            h, d, a = m[g["game_id"]]
+            t = h + d + a
+            g.update(home=h / t, draw=d / t, away=a / t, uses_market=True, market_1x2=True)
+    return out
 

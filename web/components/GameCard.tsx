@@ -2,11 +2,12 @@ import Link from "next/link";
 import type { T } from "@/lib/i18n";
 import { getLang, getT } from "@/lib/i18n/server";
 
-import { RelativeTime } from "@/components/client";
+import { UpdatedAt } from "@/components/client";
+import { ReasonLine } from "@/components/Reasons";
 import { Pill, ProbBar, StatusPill, TeamBadge } from "@/components/ui";
 import { seasonTypeLabel, tipoffTime } from "@/lib/format";
 import { kickoff } from "@/lib/nfl";
-import type { GameSide, GameSummary } from "@/lib/types";
+import { lastUpdated, type GameSide, type GameSummary } from "@/lib/types";
 
 function TeamRow({ side, p, isFavorite, final, won, league, t }: { side: GameSide; p: number | null; isFavorite: boolean; t: T;
   final: boolean; won: boolean; league: "nba" | "nfl" }) {
@@ -71,6 +72,8 @@ export async function GameCard({ game, league = "nba" }: { game: GameSummary; le
         <div className="h-1.5 rounded-full bg-surface-2" />
       )}
 
+      {pred && !final && <ReasonLine reasons={game.reasons} pick={pred.favorite} teams={{ home: game.home.name, away: game.away.name }} t={t} lang={lang} />}
+
       <div className="mt-auto flex items-center justify-between gap-2 text-[11px] text-muted">
         {pred ? (
           <span className="truncate">
@@ -87,7 +90,7 @@ export async function GameCard({ game, league = "nba" }: { game: GameSummary; le
           <Pill tone={pickCorrect ? "win" : "loss"}>{pickCorrect ? `✓ ${t("Model pick")}` : `✗ ${t("Model pick")}`}</Pill>
         ) : pred ? (
           <span className="shrink-0">
-            {pred.kind === "backtest" ? t("Backtest") : <RelativeTime iso={pred.published_at} prefix={`${t("Updated")} `} />}
+            {pred.kind === "backtest" ? t("Backtest") : <UpdatedAt iso={lastUpdated(pred)} checked={pred.checked_at} odds={pred.odds_at} />}
           </span>
         ) : null}
       </div>

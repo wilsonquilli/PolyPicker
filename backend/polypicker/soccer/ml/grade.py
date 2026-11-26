@@ -16,7 +16,9 @@ SELECT p.id, p.market, p.side, p.threshold_kind, p.threshold, p.probability, p.p
        CASE WHEN g.decided IS NOT NULL THEN g.away_score_90 ELSE g.away_score END AS away_score
 FROM soccer_predictions p JOIN soccer_games g ON g.game_id = p.game_id
 LEFT JOIN soccer_prediction_outcomes o ON o.prediction_id = p.id
-WHERE o.prediction_id IS NULL OR o.graded_state = 'pending'
+WHERE o.prediction_id IS NULL
+   -- an existing pending grade can only change once the game is over (re-grading the rest is a no-op)
+   OR ((o.graded_state = 'pending') AND g.status IN ('final', 'canceled'))
 """
 
 

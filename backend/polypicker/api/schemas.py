@@ -57,6 +57,16 @@ class PredictionHeadline(BaseModel):
     favorite: Literal["home", "away"]
     favorite_label: Literal["favorite", "slight favorite", "toss-up"] = Field(
         description="Text label so favorites are never encoded by color alone (FR-07.2)")
+    checked_at: datetime | None = Field(None, description="Last successful forecast run for this league")
+    odds_at: datetime | None = Field(None, description="Latest fetch of any market price for this game")
+
+
+class Reason(BaseModel):
+    """One plain-language reason behind a forecast (see api/reasons.py); the web app phrases it."""
+    code: str
+    side: Literal["home", "away"] | None
+    favors: Literal["home", "away", "draw"] | None
+    params: dict[str, Any]
 
 
 class GameSummary(BaseModel):
@@ -74,6 +84,7 @@ class GameSummary(BaseModel):
     away: GameSide
     winner_team_id: int | None
     prediction: PredictionHeadline | None
+    reasons: list[Reason] | None = None
 
 
 class GameDetail(GameSummary):

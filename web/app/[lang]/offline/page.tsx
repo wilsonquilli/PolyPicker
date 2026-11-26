@@ -6,7 +6,6 @@ export async function generateMetadata() {
   return { title: t("Offline") };
 }
 
-// Precached by the service worker; shown when offline and the requested page was never saved.
 export default async function OfflinePage() {
   const t = await getT();
   return (

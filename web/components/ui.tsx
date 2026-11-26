@@ -1,21 +1,13 @@
 import type { ReactNode } from "react";
-
 import { NFL_COLORS } from "@/lib/nfl";
 import soccerLogoIds from "@/lib/soccer-logos.json";
 import { hasTeamLogo, teamColor } from "@/lib/teams";
-
-// Text-bearing pieces live in a client module so they read the page language; re-exported here.
 export { Breadcrumbs, FormChips, Gauge, ProbBar, StatusPill, TriBar } from "@/components/ui-client";
 
-/** ESPN team ids with a logo file in public/logos/soccer/{id}.webp. Written by `polypicker soccer logos` (part of
- *  run-all), which downloads each new club's logo once. Clubs without a file fall back to a colored abbreviation badge. */
 const SOCCER_LOGOS = new Set<number>(soccerLogoIds);
 
-/** Team logo on a white tile (so dark and white-background logos read in both themes).
- *  Falls back to a colored abbreviation badge for unknown teams. Decorative: the team is always named nearby. */
 export function TeamBadge({ abbr, size = 32, className = "", league = "nba", color, logoId }: {
   abbr: string; size?: number; className?: string; league?: "nba" | "nfl" | "soccer";
-  /** Soccer: badge color (CSS) and the ESPN team id used for an optional logo file in public/logos/soccer/. */
   color?: string; logoId?: number;
 }) {
   if (league === "soccer" && logoId !== undefined && SOCCER_LOGOS.has(logoId)) {
@@ -79,9 +71,6 @@ export function Pill({ children, tone = "neutral", className = "" }: { children:
   );
 }
 
-
-
-
 export function EmptyState({ title, children }: { title: string; children?: ReactNode }) {
   return (
     <div className="rounded-2xl border border-dashed border-line px-6 py-14 text-center">
@@ -105,5 +94,3 @@ export function StatTile({ label, value, sub }: { label: string; value: ReactNod
     </div>
   );
 }
-
-

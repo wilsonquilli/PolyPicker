@@ -175,7 +175,8 @@ def _probs_nba(conn: Connection, ids: list[int]) -> dict[int, dict]:
         mk = pm.get(g["game_id"], book.get(g["game_id"]))
         out[g["game_id"]] = {**g, "league": None, "p": {"home": h["p_home_win"], "away": 1 - h["p_home_win"]},
                              "mkt": {"home": mk, "away": 1 - mk} if mk is not None else None,
-                             "market_source": "Polymarket" if g["game_id"] in pm else "Sportsbook" if mk is not None else None}
+                             "market_source": "Polymarket" if g["game_id"] in pm else "Sportsbook" if mk is not None else None,
+                             **_fresh(h)}
     return out
 
 
@@ -192,7 +193,7 @@ def _probs_nfl(conn: Connection, ids: list[int]) -> dict[int, dict]:
         mk = float(norm.sf(0, s, NFL_MARKET_SIGMA)) if s is not None else None
         out[g["game_id"]] = {**g, "league": None, "p": {"home": h["p_home_win"], "away": 1 - h["p_home_win"]},
                              "mkt": {"home": mk, "away": 1 - mk} if mk is not None else None,
-                             "market_source": "Betting spread" if mk is not None else None}
+                             "market_source": "Betting spread" if mk is not None else None, **_fresh(h)}
     return out
 
 
@@ -211,8 +212,14 @@ def _probs_soccer(conn: Connection, ids: list[int]) -> dict[int, dict]:
         out[g["game_id"]] = {**g, "league": lg.slug,
                              "p": {"home": h["p_home"], "draw": h.get("p_draw", 0.0), "away": h.get("p_away", 0.0)},
                              "mkt": {"home": o["p_home"], "draw": o["p_draw"], "away": o["p_away"]} if o else None,
-                             "market_source": "Sportsbooks" if o else None}
+                             "market_source": "Sportsbooks" if o else None, **_fresh(h)}
     return out
+
+
+def _fresh(h: dict) -> dict:
+    """Forecast publish / re-check / odds-fetch times (see api/freshness.py) for the "Updated X ago" label."""
+    iso = lambda v: v.isoformat() if isinstance(v, datetime) else v  # noqa: E731
+    return {"published_at": iso(h.get("published_at")), "checked_at": iso(h.get("checked_at")), "odds_at": iso(h.get("odds_at"))}
 
 
 PROBS = {"nba": _probs_nba, "nfl": _probs_nfl, "soccer": _probs_soccer}
@@ -244,6 +251,7 @@ def lookup(conn: Connection, legs: list[tuple[str, int, str]]) -> tuple[list[dic
             "p_model": round(g["p"][pick], 4),
             "p_market": round(g["mkt"][pick], 4) if g["mkt"] and g["mkt"].get(pick) is not None else None,
             "market_source": g["market_source"],
+            "published_at": g.get("published_at"), "checked_at": g.get("checked_at"), "odds_at": g.get("odds_at"),
             "href": f"/soccer/{g['league']}/games/{gid}" if sport == "soccer" else f"/{sport}/games/{gid}",
         })
     return ok, bad

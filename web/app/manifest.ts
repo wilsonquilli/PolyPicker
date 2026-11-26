@@ -1,7 +1,5 @@
 import type { MetadataRoute } from "next";
 
-// Web App Manifest: makes PolyPicker installable to the home screen (Android/Chrome/Edge install
-// prompt, iOS "Add to Home Screen") and run full-screen like a native app.
 export default function manifest(): MetadataRoute.Manifest {
   return {
     id: "/",
@@ -13,8 +11,6 @@ export default function manifest(): MetadataRoute.Manifest {
     display: "standalone",
     display_override: ["standalone", "minimal-ui"],
     orientation: "any",
-    // Android builds the launch screen from these: brand navy + the icon + the name (same look as the iOS launch
-    // images in public/splash and the web splash overlay).
     background_color: "#021022",
     theme_color: "#021022",
     categories: ["sports", "news"],
@@ -26,7 +22,7 @@ export default function manifest(): MetadataRoute.Manifest {
       { src: "/icons/maskable-192.png", sizes: "192x192", type: "image/png", purpose: "maskable" },
       { src: "/icons/maskable-512.png", sizes: "512x512", type: "image/png", purpose: "maskable" },
     ],
-    // Long-press the app icon (Android) for these.
+
     shortcuts: [
       { name: "Today's NBA games", short_name: "Today", url: "/nba?source=pwa-shortcut", icons: [{ src: "/icons/icon-192.png", sizes: "192x192" }] },
       { name: "Upcoming games", short_name: "Upcoming", url: "/nba?view=upcoming&source=pwa-shortcut", icons: [{ src: "/icons/icon-192.png", sizes: "192x192" }] },
@@ -34,7 +30,7 @@ export default function manifest(): MetadataRoute.Manifest {
       { name: "Soccer competitions", short_name: "Soccer", url: "/soccer?source=pwa-shortcut", icons: [{ src: "/icons/icon-192.png", sizes: "192x192" }] },
       { name: "Model accuracy", short_name: "Accuracy", url: "/nba/accuracy?source=pwa-shortcut", icons: [{ src: "/icons/icon-192.png", sizes: "192x192" }] },
     ],
-    // Shown in Android's richer install dialog.
+
     screenshots: [
       { src: "/screenshots/mobile-slate.png", sizes: "780x1688", type: "image/png", form_factor: "narrow", label: "Today's NBA games with win probabilities" },
       { src: "/screenshots/mobile-game.png", sizes: "780x1688", type: "image/png", form_factor: "narrow", label: "Game forecast with margin distribution" },

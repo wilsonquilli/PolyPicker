@@ -21,7 +21,9 @@ FROM predictions p
 JOIN games g ON g.game_id = p.game_id
 LEFT JOIN prediction_outcomes o ON o.prediction_id = p.id
 LEFT JOIN player_game_stats s ON p.subject_type = 'player' AND s.game_id = p.game_id AND s.player_id = p.subject_id
-WHERE o.prediction_id IS NULL OR o.graded_state = 'pending'
+WHERE o.prediction_id IS NULL
+   -- an existing pending grade can only change once the game is over (re-grading the rest is a no-op)
+   OR ((o.graded_state = 'pending') AND g.status IN ('final', 'canceled'))
 """
 
 

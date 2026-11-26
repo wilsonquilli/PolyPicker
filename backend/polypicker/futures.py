@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import timedelta, datetime, timezone
 
 import numpy as np
 import polars as pl
@@ -120,22 +120,97 @@ def fit_goal_ratings(games: list[tuple[int, int, float, float, bool]], teams: li
 NBA_SHOCK = 2.75      # sd (points) of a team's true-strength uncertainty for the rest of the season
 
 
-def simulate_nba(engine: Engine, n: int = N_SIMS, seed: int = 7) -> dict:
+def _real_winner(w: np.ndarray, a, b, results: list[tuple[int, int, int]]) -> np.ndarray:
+    """Replace simulated winners with real ones wherever the simulated pairing is a game already played."""
+    a = np.broadcast_to(a, w.shape); b = np.broadcast_to(b, w.shape)
+    for x, y, win in results:
+        m = ((a == x) & (b == y)) | ((a == y) & (b == x))
+        if m.any():
+            w = np.where(m, win, w)
+    return w
+
+
+def _nba_postseason(engine: Engine, season: int, ix: dict[int, int], as_of=None) -> dict:
+    """Real play-in games and playoff series so far (team indices): series state (home court, wins, games played),
+    final play-in results, the play-in seeds 7-10 and, once the bracket is set, seeds 1-8 per conference."""
+    rows = _rows(engine, """SELECT season_type, game_label, game_sub_label, tipoff_utc, home_team_id, away_team_id,
+                                   home_score, away_score, status
+                            FROM games WHERE season = :s AND season_type IN ('play_in', 'playoffs') ORDER BY tipoff_utc""", s=season)
+    rows = [r for r in rows if r["home_team_id"] in ix and r["away_team_id"] in ix]
+    if as_of is not None:     # replay: games after as_of not played yet; a series exists once its game 1 was scheduled
+        first = {}
+        for r in rows:
+            first.setdefault((r["game_label"], frozenset((r["home_team_id"], r["away_team_id"]))), r["tipoff_utc"])
+        rows = [r if r["tipoff_utc"] <= as_of else {**r, "status": "scheduled", "home_score": None, "away_score": None}
+                for r in rows if r["season_type"] == "play_in" or first[(r["game_label"], frozenset((r["home_team_id"], r["away_team_id"])))] <= as_of + timedelta(days=2)]
+    done = lambda r: r["status"] == "final" and r["home_score"] is not None and r["home_score"] != r["away_score"]  # noqa: E731
+    win = lambda r: ix[r["home_team_id"]] if r["home_score"] > r["away_score"] else ix[r["away_team_id"]]  # noqa: E731
+    wins = _rows(engine, """SELECT t.team_id, count(*) FILTER (WHERE g.winner_team_id = t.team_id)::float / greatest(count(*), 1) pct
+                            FROM teams t JOIN games g ON (g.home_team_id = t.team_id OR g.away_team_id = t.team_id)
+                            WHERE g.season = :s AND g.season_type = 'regular' AND g.status = 'final' GROUP BY t.team_id""", s=season)
+    pct = {ix[r["team_id"]]: r["pct"] for r in wins if r["team_id"] in ix}
+    out: dict = {"series": [], "play_in_results": [], "play_in": {}, "first_round": {}}
+    pi_by: dict[str, list[dict]] = {}
+    for r in rows:
+        if r["season_type"] == "play_in":
+            pi_by.setdefault(r["game_sub_label"] or "", []).append(r)
+            if done(r):
+                out["play_in_results"].append((ix[r["home_team_id"]], ix[r["away_team_id"]], win(r)))
+    for conf, gs in pi_by.items():
+        firsts = gs[:2]
+        if len(firsts) == 2:     # 7 v 8 is the pairing of the better records; the home side is the higher seed
+            g78, g910 = sorted(firsts, key=lambda r: -(pct.get(ix[r["home_team_id"]], 0) + pct.get(ix[r["away_team_id"]], 0)))
+            out["play_in"][conf] = [ix[g78["home_team_id"]], ix[g78["away_team_id"]], ix[g910["home_team_id"]], ix[g910["away_team_id"]]]
+    by: dict[tuple, list[dict]] = {}
+    for r in rows:
+        if r["season_type"] == "playoffs":
+            by.setdefault((r["game_label"] or "", frozenset((r["home_team_id"], r["away_team_id"]))), []).append(r)
+    r1: dict[str, list[dict]] = {}
+    for (label, _), gs in by.items():
+        hc = ix[gs[0]["home_team_id"]]
+        other = ix[gs[0]["away_team_id"]]
+        fin = [g for g in gs if done(g)]
+        x = {"label": label, "hc": hc, "other": other, "played": len(fin),
+             "w_hc": sum(win(g) == hc for g in fin), "w_other": sum(win(g) == other for g in fin)}
+        out["series"].append(x)
+        if label.endswith("First Round"):
+            r1.setdefault(label.split()[0], []).append(x)
+    for conf, xs in r1.items():
+        if len(xs) == 4:         # home court = higher seed; the four home sides ranked by record are seeds 1-4
+            xs = sorted(xs, key=lambda x: -pct.get(x["hc"], 0))
+            out["first_round"][conf] = [x["hc"] for x in xs] + [x["other"] for x in reversed(xs)]
+    return out
+
+
+def simulate_nba(engine: Engine, n: int = N_SIMS, seed: int = 7, *, season: int | None = None, save: bool = True,
+                 as_of=None) -> dict:
+    """Rest of the regular season, the play-in and the playoffs. Play-in games and playoff series already played keep
+    their real results (a series in progress continues from its real score); once the bracket is set the real seeds
+    are used. ``season`` / ``save=False`` replay a past season without storing it."""
     from polypicker.ml import pipeline as P
     rng = np.random.default_rng(seed)
     fs = P.build_features(engine)
-    season = int(fs.games.filter(pl.col("status") == "final")["season"].max())
+    season = season or int(fs.games.filter(pl.col("status") == "final")["season"].max())
     gm = P.load_model(engine, P.active_model_ids(engine)["game"])
     base = getattr(gm, "base", gm)          # v3 market-aware model: lines exist ~1 day out, use the v2 model
     sigma = float(base.sigma_win)
     sched = fs.games.filter((pl.col("season") == season) & (pl.col("status") == "scheduled")
                             & (pl.col("season_type") == "regular"))
-    preds = base.predict_games(fs.game_design.filter(pl.col("game_id").is_in(sched["game_id"].implode())))
+    sched_design = fs.game_design.filter(pl.col("game_id").is_in(sched["game_id"].implode()))
+    preds = base.predict_games(sched_design) if sched_design.height else []   # none left once the regular season ends
 
     teams = _rows(engine, "SELECT team_id, abbreviation, city, name, full_name, conference FROM teams WHERE is_active ORDER BY team_id")
     tids = [t["team_id"] for t in teams]
     ix = {t: i for i, t in enumerate(tids)}
-    hfa, rating = fit_margin_ratings([(p["home_team_id"], p["away_team_id"], p["mu_margin"]) for p in preds], tids)
+    # Ratings from the model's margins for the games still to play; near the end of the regular season (and in the
+    # playoffs) too few remain, so the whole season's regular-season games are used instead.
+    fit_on = preds
+    if len(preds) < 150:
+        season_ids = fs.games.filter((pl.col("season") == season) & (pl.col("season_type") == "regular"))["game_id"]
+        fit_on = base.predict_games(fs.game_design.filter(pl.col("game_id").is_in(season_ids.implode())))
+    hfa, rating = fit_margin_ratings([(p["home_team_id"], p["away_team_id"], p["mu_margin"]) for p in fit_on
+                                      if p["home_team_id"] in ix and p["away_team_id"] in ix], tids)
+    post = _nba_postseason(engine, season, ix, as_of)
 
     finals = _rows(engine, """SELECT game_id, game_date_et, home_team_id, away_team_id, home_score, away_score FROM games
                               WHERE season = :s AND season_type = 'regular' AND status = 'final'
@@ -166,13 +241,22 @@ def simulate_nba(engine: Engine, n: int = N_SIMS, seed: int = 7) -> dict:
         return norm.cdf(mg / sigma)
 
     def game(a, b, a_home):
-        return np.where(rng.random(n) < p_win(a, b, a_home), a, b)
+        w = np.where(rng.random(n) < p_win(a, b, a_home), a, b)
+        return _real_winner(w, a, b, post["play_in_results"])     # a play-in game already played keeps its result
 
     def series(a, b):  # a has home court (2-2-1-1-1); winner of the best of 7 = more wins over all 7 games
-        wa = np.zeros(n)
-        for home in (True, True, False, False, True, False, True):
-            wa += rng.random(n) < p_win(a, b, np.full(n, home))
-        return np.where(wa >= 4, a, b)
+        a = np.broadcast_to(a, (n,)).copy(); b = np.broadcast_to(b, (n,)).copy()
+        hc, ot = a.copy(), b.copy()
+        w_hc, w_ot, start = np.zeros(n), np.zeros(n), np.zeros(n, int)
+        for x in post["series"]:                                  # a real series: its home court, wins so far
+            m = ((a == x["hc"]) & (b == x["other"])) | ((a == x["other"]) & (b == x["hc"]))
+            if m.any():
+                hc[m], ot[m], w_hc[m], w_ot[m], start[m] = x["hc"], x["other"], x["w_hc"], x["w_other"], x["played"]
+        for k, home in enumerate((True, True, False, False, True, False, True)):
+            r = rng.random(n) < p_win(hc, ot, np.full(n, home))
+            play = k >= start
+            w_hc += play & r; w_ot += play & ~r
+        return np.where(w_hc >= 4, hc, ot)
 
     def better(a, b):  # (higher seed first) by regular-season wins
         swap = key[ar, b] > key[ar, a]
@@ -184,12 +268,19 @@ def simulate_nba(engine: Engine, n: int = N_SIMS, seed: int = 7) -> dict:
         members = np.array([ix[t["team_id"]] for t in teams if t["conference"] == conf])
         order = members[np.argsort(-key[:, members], axis=1)]          # (n, 15) seeds 1..15
         s = [order[:, i] for i in range(10)]
-        top_seed[ar, s[0]] = True
-        w78 = game(s[6], s[7], np.full(n, True))
-        l78 = np.where(w78 == s[6], s[7], s[6])
-        w910 = game(s[8], s[9], np.full(n, True))
-        eighth = game(l78, w910, np.full(n, True))
-        seeds = s[:6] + [w78, eighth]
+        r1_real = post["first_round"].get(conf)
+        if r1_real:                                                    # the bracket is set: real seeds 1..8
+            seeds = [np.full(n, t) for t in r1_real]
+        else:
+            pi = post["play_in"].get(conf)
+            if pi:                                                     # play-in set: real 7..10 seeds
+                s[6:10] = [np.full(n, t) for t in pi]
+            w78 = game(s[6], s[7], np.full(n, True))
+            l78 = np.where(w78 == s[6], s[7], s[6])
+            w910 = game(s[8], s[9], np.full(n, True))
+            eighth = game(l78, w910, np.full(n, True))
+            seeds = s[:6] + [w78, eighth]
+        top_seed[ar, seeds[0]] = True
         for t in seeds:
             made[ar, t] = True
         r1 = [series(seeds[0], seeds[7]), series(seeds[3], seeds[4]), series(seeds[2], seeds[5]), series(seeds[1], seeds[6])]
@@ -254,8 +345,10 @@ def simulate_nba(engine: Engine, n: int = N_SIMS, seed: int = 7) -> dict:
     payload = {**es, "title": "NBA champion", "event": "NBA Finals", "season_label": f"{season}-{str(season + 1)[2:]}",
                "status": "simulated", "remaining_games": len(preds), "teams": out, "reasons": reasons,
                "method": f"{n:,} simulations of the remaining {len(preds)} regular-season games, the play-in and every playoff round."}
-    _save(engine, "nba", "nba", season, payload, n)
-    return {"competition": "nba", "favorite": fav["name"], "p": fav["p_title"], "remaining_games": len(preds)}
+    if save:
+        _save(engine, "nba", "nba", season, payload, n)
+    return {"competition": "nba", "favorite": fav["name"], "p": fav["p_title"], "remaining_games": len(preds),
+            "teams": None if save else out}
 
 
 # ---------------------------------------------------------------- NFL
@@ -263,20 +356,62 @@ def simulate_nba(engine: Engine, n: int = N_SIMS, seed: int = 7) -> dict:
 NFL_SHOCK = 3.0
 
 
-def simulate_nfl(engine: Engine, n: int = N_SIMS, seed: int = 11) -> dict:
+def _nfl_postseason(engine: Engine, season: int, ix: dict[int, int], conf_of: dict[int, str], as_of=None) -> dict:
+    """Real playoff results so far and, once the wild-card round is set, the real seeds 1-7 per conference
+    (wild-card hosts = seeds 2-4 by record, their opponents 7-5, the team with the bye = seed 1)."""
+    rows = _rows(engine, """SELECT game_type, kickoff_utc, home_team_id, away_team_id, home_score, away_score, status
+                            FROM nfl_games WHERE season = :s AND game_type IN ('WC', 'DIV', 'CON', 'SB') ORDER BY kickoff_utc""", s=season)
+    rows = [r for r in rows if r["home_team_id"] in ix and r["away_team_id"] in ix]
+    if as_of is not None:
+        rows = [r if r["kickoff_utc"] <= as_of else {**r, "status": "scheduled", "home_score": None, "away_score": None}
+                for r in rows if r["kickoff_utc"] <= as_of + timedelta(days=7)]
+    pct = {ix[r["team_id"]]: r["pct"] for r in _rows(engine, """
+        SELECT t.team_id, (count(*) FILTER (WHERE g.winner_team_id = t.team_id) + 0.5 * count(*) FILTER (WHERE g.home_score = g.away_score))::float
+               / greatest(count(*), 1) pct
+        FROM nfl_teams t JOIN nfl_games g ON (g.home_team_id = t.team_id OR g.away_team_id = t.team_id)
+        WHERE g.season = :s AND g.game_type = 'REG' AND g.status = 'final' GROUP BY t.team_id""", s=season) if r["team_id"] in ix}
+    out: dict = {"results": [], "seeds": {}}
+    for r in rows:
+        if r["status"] == "final" and r["home_score"] is not None and r["home_score"] != r["away_score"]:
+            w = r["home_team_id"] if r["home_score"] > r["away_score"] else r["away_team_id"]
+            out["results"].append((ix[r["home_team_id"]], ix[r["away_team_id"]], ix[w]))
+    inv = {i: t for t, i in ix.items()}
+    for conf in ("AFC", "NFC"):
+        wc = [r for r in rows if r["game_type"] == "WC" and conf_of.get(r["home_team_id"]) == conf]
+        if len(wc) != 3:
+            continue
+        wc.sort(key=lambda r: -pct.get(ix[r["home_team_id"]], 0))
+        in_wc = {t for r in wc for t in (r["home_team_id"], r["away_team_id"])}
+        bye = max((i for i in ix.values() if conf_of.get(inv[i]) == conf and inv[i] not in in_wc), key=lambda i: pct.get(i, 0))
+        out["seeds"][conf] = [bye] + [ix[r["home_team_id"]] for r in wc] + [ix[r["away_team_id"]] for r in reversed(wc)]
+    return out
+
+
+def simulate_nfl(engine: Engine, n: int = N_SIMS, seed: int = 11, *, season: int | None = None, save: bool = True,
+                 as_of=None) -> dict:
+    """Rest of the regular season and the 14-team playoff. Once the wild-card round is set the real seeds are used,
+    and playoff games already played keep their real results. ``season`` / ``save=False`` / ``as_of`` replay a past
+    season without storing it."""
     from polypicker.ml.pipeline import load_model
     from polypicker.nfl.ml import pipeline as NP
     rng = np.random.default_rng(seed)
     fs = NP.build_features(engine)
-    season = int(fs.games.filter(pl.col("status") == "final")["season"].max())
+    season = season or int(fs.games.filter(pl.col("status") == "final")["season"].max())
     gm = load_model(engine, NP.active_model_ids(engine)["game"])
     sigma = float(gm.sigma_win)
     sched = fs.games.filter((pl.col("season") == season) & (pl.col("status") != "final") & (pl.col("game_type") == "REG"))
-    preds = gm.predict_games(fs.game_design.filter(pl.col("game_id").is_in(sched["game_id"].implode())))
+    sched_design = fs.game_design.filter(pl.col("game_id").is_in(sched["game_id"].implode()))
+    preds = gm.predict_games(sched_design) if sched_design.height else []    # none left once the regular season ends
     teams = _rows(engine, "SELECT team_id, abbreviation, name, full_name, conference, division FROM nfl_teams WHERE is_active ORDER BY team_id")
     tids = [t["team_id"] for t in teams]
     ix = {t: i for i, t in enumerate(tids)}
-    hfa, rating = fit_margin_ratings([(p["home_team_id"], p["away_team_id"], p["mu_margin"]) for p in preds], tids)
+    fit_on = preds
+    if len(preds) < 48:      # last weeks / playoffs: rate teams on the model's view of the whole regular season
+        season_ids = fs.games.filter((pl.col("season") == season) & (pl.col("game_type") == "REG"))["game_id"]
+        fit_on = gm.predict_games(fs.game_design.filter(pl.col("game_id").is_in(season_ids.implode())))
+    hfa, rating = fit_margin_ratings([(p["home_team_id"], p["away_team_id"], p["mu_margin"]) for p in fit_on
+                                      if p["home_team_id"] in ix and p["away_team_id"] in ix], tids)
+    post = _nfl_postseason(engine, season, ix, {t["team_id"]: t["conference"] for t in teams}, as_of)
 
     finals = _rows(engine, """SELECT home_team_id, away_team_id, home_score, away_score FROM nfl_games
                               WHERE season = :s AND game_type = 'REG' AND status = 'final' ORDER BY kickoff_utc""", s=season)
@@ -305,7 +440,7 @@ def simulate_nfl(engine: Engine, n: int = N_SIMS, seed: int = 11) -> dict:
 
     def game(a, b, where):  # where: 1 = a at home, 0 = neutral
         mg = strength[ar, a] - strength[ar, b] + hfa * where
-        return np.where(rng.random(n) < norm.cdf(mg / sigma), a, b)
+        return _real_winner(np.where(rng.random(n) < norm.cdf(mg / sigma), a, b), a, b, post["results"])
 
     made = np.zeros((n, len(tids)), bool); div_win = np.zeros((n, len(tids)), bool)
     conf_win = np.zeros((n, len(tids)), bool); top_seed = np.zeros((n, len(tids)), bool)
@@ -324,6 +459,9 @@ def simulate_nfl(engine: Engine, n: int = N_SIMS, seed: int = 11) -> dict:
             k[conf_teams[None, :] == winners[:, j:j + 1]] = -1e9
         wild = conf_teams[np.argsort(-k, axis=1)[:, :3]]
         seeds = np.hstack([winners, wild])                                     # (n, 7) seeds 1..7
+        if conf in post["seeds"]:                                              # the real bracket once it's set
+            seeds = np.tile(np.array(post["seeds"][conf]), (n, 1))
+            winners = seeds[:, :4]
         for j in range(7):
             made[ar, seeds[:, j]] = True
         for j in range(4):
@@ -393,8 +531,10 @@ def simulate_nfl(engine: Engine, n: int = N_SIMS, seed: int = 11) -> dict:
                "season_label": str(season), "status": "simulated", "remaining_games": len(preds), "teams": out,
                "reasons": reasons,
                "method": f"{n:,} simulations of the remaining {len(preds)} regular-season games and the 14-team playoff."}
-    _save(engine, "nfl", "nfl", season, payload, n)
-    return {"competition": "nfl", "favorite": fav["name"], "p": fav["p_title"], "remaining_games": len(preds)}
+    if save:
+        _save(engine, "nfl", "nfl", season, payload, n)
+    return {"competition": "nfl", "favorite": fav["name"], "p": fav["p_title"], "remaining_games": len(preds),
+            "teams": None if save else out}
 
 
 def _roman(x: int) -> str:
@@ -608,19 +748,137 @@ def _one_match_neutral(rng, gr: GoalRatings, shock, a, b, n):
     return np.where(ga > gb, a, np.where(gb > ga, b, np.where(rng.random(n) < 0.5, a, b)))
 
 
-def simulate_uefa(engine: Engine, slug: str, n: int = N_SIMS, seed: int = 5) -> dict:
-    """Champions / Europa League: 36-club league phase, knockout play-offs (9th-24th), then a seeded bracket."""
+KO_STAGES = ("knockout-round-playoffs", "round-of-16", "quarterfinals", "semifinals", "final")
+KO_NAMES = {"knockout-round-playoffs": ("knockout play-offs", "playoffs de eliminatoria"), "round-of-16": ("round of 16", "octavos de final"),
+            "quarterfinals": ("quarter-finals", "cuartos de final"), "semifinals": ("semi-finals", "semifinales"), "final": ("final", "final")}
+
+
+def _ko_ties(games: list[dict], stage: str, members: set[int]) -> list[dict]:
+    """The drawn ties of one knockout round (empty until the draw has put real clubs in every fixture)."""
+    by: dict[frozenset, list[dict]] = {}
+    for g in games:
+        if g["stage"] != stage:
+            continue
+        if g["home_team_id"] not in members or g["away_team_id"] not in members:
+            return []                                   # placeholder sides: not drawn yet
+        by.setdefault(frozenset((g["home_team_id"], g["away_team_id"])), []).append(g)
+    return [{"stage": stage, "teams": tuple(sorted(k)), "legs": sorted(v, key=lambda g: g["kickoff_utc"])} for k, v in by.items()]
+
+
+def _tie_state(tie: dict, team: int) -> tuple[int, int, bool]:
+    """(goals for, goals against, every leg played) for ``team`` over the legs played so far (extra time included)."""
+    gf = ga = 0
+    done = True
+    for g in tie["legs"]:
+        if g["status"] != "final" or g["home_score"] is None:
+            done = False
+            continue
+        home = g["home_team_id"] == team
+        gf += g["home_score"] if home else g["away_score"]
+        ga += g["away_score"] if home else g["home_score"]
+    return gf, ga, done
+
+
+def _tie_outcome(rng, gr: GoalRatings, shock, tie: dict, n: int) -> np.ndarray:
+    """Winner (rating index, per simulation) of a real tie: legs already played count, the rest are simulated.
+    A level aggregate after the last leg went to extra time / penalties: the real shootout if played, else 50/50."""
+    a, b = tie["teams"]
+    ia, ib = gr.idx(a), gr.idx(b)
+    ar = np.arange(n)
+    ga, gb = np.zeros(n), np.zeros(n)
+    final_leg = tie["stage"] == "final"
+    for g in tie["legs"]:
+        h, aw = g["home_team_id"], g["away_team_id"]
+        if g["status"] == "final" and g["home_score"] is not None:
+            hs, as_ = float(g["home_score"]), float(g["away_score"])
+        else:
+            ih, iw = gr.idx(h), gr.idx(aw)
+            e = shock[ar, ih] - shock[ar, iw]
+            hfa = 0.0 if (final_leg or g.get("neutral")) else gr.hfa
+            hs = rng.poisson(np.exp(gr.base + hfa + gr.att[ih] - gr.dfn[iw] + e))
+            as_ = rng.poisson(np.exp(gr.base + gr.att[iw] - gr.dfn[ih] - e))
+        if h == a:
+            ga = ga + hs; gb = gb + as_
+        else:
+            ga = ga + as_; gb = gb + hs
+    level = np.where(rng.random(n) < 0.5, ia, ib)
+    last = tie["legs"][-1]
+    if last["status"] == "final" and last.get("home_shootout") is not None and last.get("away_shootout") is not None:
+        home_won = last["home_shootout"] > last["away_shootout"]
+        level = np.full(n, gr.idx(last["home_team_id"] if home_won else last["away_team_id"]))
+    return np.where(ga > gb, ia, np.where(gb > ga, ib, level))
+
+
+def _resolve_round(actual: list[dict], default_pairs: list[tuple], play_default, play_actual) -> list[np.ndarray]:
+    """Winners of every slot of a round. Drawn ties replace the simulated pairing: each goes to the bracket slot whose
+    possible clubs include both of its sides (so later rounds follow the real path); any left over fill the rest."""
+    if not actual:
+        return [play_default(a, b) for a, b in default_pairs]
+    cands = [set(np.unique(a).tolist()) | set(np.unique(b).tolist()) for a, b in default_pairs]
+    slots: list = [None] * len(default_pairs)
+    rest = []
+    for tie in actual:
+        ti = set(tie["_idx"])
+        j = next((j for j, c in enumerate(cands) if slots[j] is None and ti <= c), None)
+        if j is None:
+            rest.append(tie)
+        else:
+            slots[j] = play_actual(tie)
+    for j in range(len(slots)):
+        if slots[j] is None:
+            slots[j] = play_actual(rest.pop(0)) if rest else play_default(*default_pairs[j])
+    return slots
+
+
+def _as_of_view(games: list[dict], as_of) -> list[dict]:
+    """The competition as it stood at ``as_of`` (for replaying a past season): later results hidden, and a knockout
+    round's fixtures only once the previous round had finished (its draw done)."""
+    end: dict[str, object] = {}
+    for g in games:
+        st = g["stage"] or "league-phase"
+        end[st] = max(end.get(st, g["kickoff_utc"]), g["kickoff_utc"])
+    order = ("league-phase", *KO_STAGES)
+    out = []
+    for g in games:
+        st = g["stage"] or "league-phase"
+        if st in KO_STAGES:
+            prev = order[order.index(st) - 1]
+            if prev in end and end[prev] >= as_of:
+                continue
+        if g["kickoff_utc"] > as_of:
+            g = {**g, "status": "scheduled", "home_score": None, "away_score": None, "home_shootout": None, "away_shootout": None}
+        out.append(g)
+    return out
+
+
+def simulate_uefa(engine: Engine, slug: str, n: int = N_SIMS, seed: int = 5, *, season: int | None = None,
+                  as_of=None, save: bool = True) -> dict:
+    """Champions / Europa League: 36-club league phase, knockout play-offs (9th-24th), then a seeded bracket.
+
+    Rounds that have been drawn use the real ties and results (legs still to play are simulated, a level aggregate
+    goes 50/50 unless the shootout was played); rounds not drawn yet use UEFA's seeding pairs. Once the final has
+    been played the competition is ``decided``."""
     rng = np.random.default_rng(seed)
     s = _soccer_setup(engine, slug)
+    if season is not None:
+        s.season = season
     games = _current(engine, s.league.competition, s.season)
+    if as_of is not None:
+        games = _as_of_view(games, as_of)
     lp = [g for g in games if g["stage"] == "league-phase"]
-    if any(g["status"] == "final" for g in games if g["stage"] and g["stage"] != "league-phase"):
-        raise RuntimeError(f"{slug}: knockout rounds have started; the bracket simulation needs the drawn ties (not built yet)")
     finals = [g for g in lp if g["status"] == "final" and g["home_score"] is not None]
     left = [g for g in lp if g["status"] != "final"]
     tids = sorted({g["home_team_id"] for g in lp} | {g["away_team_id"] for g in lp})
-    xg = _xg(s, [g["game_id"] for g in left])
-    gr = fit_goal_ratings([(p["home_team_id"], p["away_team_id"], p["xg_home"], p["xg_away"], False) for p in xg.values()], tids)
+    members = set(tids)
+    ko = {st: _ko_ties(games, st, members) for st in KO_STAGES}
+    # Ratings from the model's expected goals: the matches still to play, or the whole season once few remain
+    # (after the league phase only a handful of knockout fixtures are scheduled at a time).
+    todo = [g["game_id"] for g in games if g["status"] != "final"]
+    xg_all = _xg(s, todo if len(todo) >= 30 else [g["game_id"] for g in games])
+    neutral = {g["game_id"]: g["stage"] == "final" or bool(g.get("neutral")) for g in games}
+    gr = fit_goal_ratings([(p["home_team_id"], p["away_team_id"], p["xg_home"], p["xg_away"], neutral.get(p["game_id"], False))
+                           for p in xg_all.values() if p["home_team_id"] in members and p["away_team_id"] in members], tids)
+    xg = {gid: xg_all[gid] for gid in (g["game_id"] for g in left) if gid in xg_all}
     shock = rng.normal(0, SOCCER_SHOCK, (n, len(tids)))
     tab = _Table(tids, n, rng)
     for g in finals:
@@ -635,28 +893,33 @@ def simulate_uefa(engine: Engine, slug: str, n: int = N_SIMS, seed: int = 5) -> 
     order = tab.order()                                     # column indices == rating indices (same sorted tids)
     ar = np.arange(n)
     seed_ = lambda k: order[:, k - 1]                       # noqa: E731
+    for st in KO_STAGES:
+        for tie in ko[st]:
+            tie["_idx"] = [gr.idx(t) for t in tie["teams"]]
+    two_legs = lambda a, b: _two_legs(rng, gr, shock, a, b, n)  # noqa: E731  (b, the seeded side, hosts leg 2)
+    real = lambda tie: _tie_outcome(rng, gr, shock, tie, n)     # noqa: E731
     # Knockout play-offs: 9/10 v 23/24, 11/12 v 21/22, 13/14 v 19/20, 15/16 v 17/18; seeded side hosts leg 2.
-    po = {}
-    for hi, lo in (((9, 10), (23, 24)), ((11, 12), (21, 22)), ((13, 14), (19, 20)), ((15, 16), (17, 18))):
+    keys = (((9, 10), (23, 24)), ((11, 12), (21, 22)), ((13, 14), (19, 20)), ((15, 16), (17, 18)))
+    po_pairs = []
+    for hi, lo in keys:
         x = rng.random(n) < 0.5
         h1, h2 = np.where(x, seed_(hi[0]), seed_(hi[1])), np.where(x, seed_(hi[1]), seed_(hi[0]))
         y = rng.random(n) < 0.5
         l1, l2 = np.where(y, seed_(lo[0]), seed_(lo[1])), np.where(y, seed_(lo[1]), seed_(lo[0]))
-        po[hi] = (_two_legs(rng, gr, shock, l1, h1, n), _two_legs(rng, gr, shock, l2, h2, n))
+        po_pairs += [(l1, h1), (l2, h2)]
+    po_w = _resolve_round(ko["knockout-round-playoffs"], po_pairs, two_legs, real)
     # Round of 16: 1/2 v play-off winners from 15-18, 3/4 v 13-14/19-20, 5/6 v 11-12/21-22, 7/8 v 9-10/23-24.
-    r16 = []
+    po = {hi: (po_w[2 * k], po_w[2 * k + 1]) for k, (hi, _) in enumerate(keys)}
+    r16_pairs = []
     for top, key in (((1, 2), (15, 16)), ((3, 4), (13, 14)), ((5, 6), (11, 12)), ((7, 8), (9, 10))):
         x = rng.random(n) < 0.5
         a1, a2 = po[key]
-        r16.append(_two_legs(rng, gr, shock, np.where(x, a1, a2), seed_(top[0]), n))
-        r16.append(_two_legs(rng, gr, shock, np.where(x, a2, a1), seed_(top[1]), n))
+        r16_pairs += [(np.where(x, a1, a2), seed_(top[0])), (np.where(x, a2, a1), seed_(top[1]))]
+    r16 = _resolve_round(ko["round-of-16"], r16_pairs, two_legs, real)
     # Fixed bracket: 1 and 2 in opposite halves.
-    half_a = [r16[0], r16[6], r16[2], r16[4]]
-    half_b = [r16[1], r16[7], r16[3], r16[5]]
-    qf = [_two_legs(rng, gr, shock, half_a[1], half_a[0], n), _two_legs(rng, gr, shock, half_a[3], half_a[2], n),
-          _two_legs(rng, gr, shock, half_b[1], half_b[0], n), _two_legs(rng, gr, shock, half_b[3], half_b[2], n)]
-    sf = [_two_legs(rng, gr, shock, qf[1], qf[0], n), _two_legs(rng, gr, shock, qf[3], qf[2], n)]
-    champ = _one_match_neutral(rng, gr, shock, sf[0], sf[1], n)
+    qf = _resolve_round(ko["quarterfinals"], [(r16[6], r16[0]), (r16[4], r16[2]), (r16[7], r16[1]), (r16[5], r16[3])], two_legs, real)
+    sf = _resolve_round(ko["semifinals"], [(qf[1], qf[0]), (qf[3], qf[2])], two_legs, real)
+    champ = _resolve_round(ko["final"], [(sf[0], sf[1])], lambda a, b: _one_match_neutral(rng, gr, shock, a, b, n), real)[0]
     k = len(tids)
     cnt = lambda arrs: sum(np.bincount(x, minlength=k) for x in arrs) / n  # noqa: E731
     p_title = np.bincount(champ, minlength=k) / n
@@ -679,29 +942,71 @@ def simulate_uefa(engine: Engine, slug: str, n: int = N_SIMS, seed: int = 5) -> 
     fav = out[0]
     x = fav["stats"]
     gp = max(x["played"], 1)
+    decided = bool(ko["final"]) and all(g["status"] == "final" for g in ko["final"][0]["legs"])
+    ko_started = any(ko[st_] for st_ in KO_STAGES)
     reasons = [
         f"{_ordinal(x['position'])} of 36 in the league phase: {x['points']} points from {x['played']} matches ({x['won']}W {x['drawn']}D {x['lost']}L)",
         f"Goal difference {x['gd']:+d}: scoring {x['gf'] / gp:.2f} and conceding {x['ga'] / gp:.2f} per match",
         f"Our model rates them {x['rating']:+.2f} goals a match better than an average {s.league.name} side ({_ordinal(x['rating_rank'])} of 36)",
-        f"Finish in the top eight (straight to the round of 16) in {_pct(fav['p_top8'])} of simulations",
-        f"Reach the quarter-finals in {_pct(fav['p_quarters'])}, the final in {_pct(fav['p_final'])}",
     ]
     reasons_es = [
         f"{_o(x['position'])} de 36 en la fase de liga: {x['points']} puntos en {x['played']} partidos ({x['won']}G {x['drawn']}E {x['lost']}P)",
         f"Diferencia de goles {x['gd']:+d}: anotan {x['gf'] / gp:.2f} y reciben {x['ga'] / gp:.2f} por partido",
         f"Nuestro modelo los considera {x['rating']:+.2f} goles por partido mejores que un equipo promedio de la {s.league.name} ({_o(x['rating_rank'])} de 36)",
-        f"Terminan entre los ocho primeros (directo a octavos de final) en el {_pct(fav['p_top8'])} de las simulaciones",
-        f"Llegan a cuartos de final en el {_pct(fav['p_quarters'])} y a la final en el {_pct(fav['p_final'])}",
     ]
-    es = {"title_es": f"Ganador de la {s.league.name}", "event_es": f"Final de la {s.league.name}", "reasons_es": reasons_es,
-          "method_es": (f"{_n(n)} simulaciones de los {len(left)} partidos restantes de la fase de liga, los playoffs de eliminatoria y un cuadro "
-                        "con cabezas de serie hasta la final. El sorteo real aún no se ha hecho, así que los cruces se sortean al azar dentro de los pares de cabezas de serie de la UEFA.")}
+    ko_line = _ko_reason(s, ko, fav["team_id"])
+    if ko_line:
+        reasons.insert(0, ko_line[0]); reasons_es.insert(0, ko_line[1])
+    if not ko_started:
+        reasons.append(f"Finish in the top eight (straight to the round of 16) in {_pct(fav['p_top8'])} of simulations")
+        reasons_es.append(f"Terminan entre los ocho primeros (directo a octavos de final) en el {_pct(fav['p_top8'])} de las simulaciones")
+    if not decided:
+        reasons.append(f"Reach the quarter-finals in {_pct(fav['p_quarters'])}, the final in {_pct(fav['p_final'])}")
+        reasons_es.append(f"Llegan a cuartos de final en el {_pct(fav['p_quarters'])} y a la final en el {_pct(fav['p_final'])}")
+    drawn = [KO_NAMES[st_] for st_ in KO_STAGES if ko[st_]]
+    if ko_started:
+        method = (f"{n:,} simulations of the knockout rounds. Drawn ties use the real fixtures and results "
+                  f"({', '.join(d[0] for d in drawn)}); legs still to play are simulated, and rounds not drawn yet follow UEFA's seeding pairs.")
+        method_es = (f"{_n(n)} simulaciones de las eliminatorias. Los cruces ya sorteados usan los partidos y resultados reales "
+                     f"({', '.join(d[1] for d in drawn)}); los partidos pendientes se simulan y las rondas aún no sorteadas siguen los pares de cabezas de serie de la UEFA.")
+    else:
+        method = (f"{n:,} simulations of the remaining {len(left)} league-phase matches, the knockout play-offs and a seeded "
+                  "bracket to the final. The real knockout draw isn't made yet, so pairings are drawn at random within UEFA's seeding pairs.")
+        method_es = (f"{_n(n)} simulaciones de los {len(left)} partidos restantes de la fase de liga, los playoffs de eliminatoria y un cuadro "
+                     "con cabezas de serie hasta la final. El sorteo real aún no se ha hecho, así que los cruces se sortean al azar dentro de los pares de cabezas de serie de la UEFA.")
+    es = {"title_es": f"Ganador de la {s.league.name}", "event_es": f"Final de la {s.league.name}", "reasons_es": reasons_es, "method_es": method_es}
     payload = {**es, "title": f"{s.league.name} winner", "event": f"{s.league.name} final", "season_label": s.league.season_label(s.season),
-               "status": "simulated", "remaining_games": len(left), "teams": out, "reasons": reasons,
-               "method": (f"{n:,} simulations of the remaining {len(left)} league-phase matches, the knockout play-offs and a seeded "
-                          "bracket to the final. The real knockout draw isn't made yet, so pairings are drawn at random within UEFA's seeding pairs.")}
-    _save(engine, "soccer", slug, s.season, payload, n)
-    return {"competition": slug, "favorite": fav["name"], "p": fav["p_title"], "remaining_games": len(left)}
+               "status": "decided" if decided else "simulated", "remaining_games": len(left) + sum(
+                   1 for st_ in KO_STAGES for tie in ko[st_] for g in tie["legs"] if g["status"] != "final"),
+               "teams": out, "reasons": reasons, "method": method}
+    if decided:
+        payload["champion_id"] = fav["team_id"]
+    if save:
+        _save(engine, "soccer", slug, s.season, payload, n)
+    return {"competition": slug, "favorite": fav["name"], "p": fav["p_title"], "remaining_games": payload["remaining_games"],
+            "status": payload["status"], "teams": out if not save else None}
+
+
+def _ko_reason(s: _Soccer, ko: dict, team: int) -> tuple[str, str] | None:
+    """The favourite's latest knockout tie in words (through / leading / facing), or None before the knockouts."""
+    for st in reversed(KO_STAGES):
+        tie = next((t for t in ko[st] if team in t["teams"]), None)
+        if not tie:
+            continue
+        opp = s.teams[next(t for t in tie["teams"] if t != team)]
+        on, oes = opp["short_name"] or opp["name"], opp["short_name"] or opp["name"]
+        en, es_ = KO_NAMES[st]
+        gf, ga, done = _tie_state(tie, team)
+        played = any(g["status"] == "final" for g in tie["legs"])
+        if done:
+            if st == "final":
+                return (f"Won the final against {on} ({gf}-{ga})", f"Ganaron la final ante {oes} ({gf}-{ga})")
+            return (f"Knocked out {on} {gf}-{ga} on aggregate in the {en}", f"Eliminaron a {oes} {gf}-{ga} en el global de {es_}")
+        if played:
+            word = ("Lead", "Ganan") if gf > ga else ("Trail", "Pierden") if gf < ga else ("Level with", "Empatan con")
+            return (f"{word[0]} {on} {gf}-{ga} after the first leg of the {en}", f"{word[1]} {gf}-{ga} ante {oes} tras la ida de {es_}")
+        return (f"Face {on} in the {en}", f"Se enfrentan a {oes} en {es_}")
+    return None
 
 
 def _cup_record(engine: Engine, comp: str, season: int, tid: int) -> dict:

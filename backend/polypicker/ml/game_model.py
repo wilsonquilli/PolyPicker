@@ -27,7 +27,10 @@ LEGACY_FEATURES = ["struct_pts", "struct_pts_l10", "ortg", "opp_drtg", "ortg_l10
 # 2024-25 and 2025-26: log loss 0.608 -> 0.593 and 0.598 -> 0.586; accuracy 66.7 -> 68.9% and 68.2 -> 68.3%.
 LINEUP = ["lineup_pm", "opp_lineup_pm", "lineup_gs", "opp_lineup_gs", "missing_pm", "opp_missing_pm",
           "missing_min", "opp_missing_min"]
-FEATURES = LEGACY_FEATURES + LINEUP
+# v4 (2026-11-24) adds adjusted plus-minus lineup strength (polypicker/ml/apm.py): 2026-27 accuracy
+# 65.9 -> 66.7%, log loss 0.5901 -> 0.5877 (2025-26 log loss 0.5864 -> 0.5835) for games without a line.
+APM = ["lineup_apm", "opp_lineup_apm", "missing_apm", "opp_missing_apm"]
+FEATURES = LEGACY_FEATURES + LINEUP + APM
 # v3: when a game has a betting line, a second model also sees the market (sportsbook spread/total and
 # Polymarket price, as an expected margin + half the total). Games without a line use the v2 model.
 MARKET = ["mkt_margin", "mkt_total_half"]
@@ -44,8 +47,10 @@ FACTOR_GROUPS = {
     "Rest and back-to-backs": ["rest_days", "opp_rest_days", "b2b", "opp_b2b"],
     "Pace": ["exp_pace"],
     "Playoff context": ["is_playoffs"],
-    "Player ratings of tonight's lineup": ["lineup_pm", "opp_lineup_pm", "lineup_gs", "opp_lineup_gs"],
-    "Injuries and absences": ["missing_pm", "opp_missing_pm", "missing_min", "opp_missing_min"],
+    "Player ratings of tonight's lineup": ["lineup_pm", "opp_lineup_pm", "lineup_gs", "opp_lineup_gs",
+                                           "lineup_apm", "opp_lineup_apm"],
+    "Injuries and absences": ["missing_pm", "opp_missing_pm", "missing_min", "opp_missing_min",
+                              "missing_apm", "opp_missing_apm"],
     "Betting markets (sportsbooks + Polymarket)": ["mkt_margin", "mkt_total_half"],
 }
 

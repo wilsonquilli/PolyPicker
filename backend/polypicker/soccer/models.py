@@ -131,6 +131,132 @@ class SoccerPredictionOutcome(Base):
     graded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 
+class SoccerFotmobStats(ProvenanceMixin, Base):
+    """Per-match advanced stats from FotMob (Opta-derived): expected goals and chance quality, home / away.
+    Unofficial endpoints: research use only. NULL when FotMob has no xG for the match (older seasons)."""
+    __tablename__ = "soccer_fotmob_stats"
+    game_id: Mapped[int] = mapped_column(ForeignKey("soccer_games.game_id"), primary_key=True)
+    fotmob_match_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    competition: Mapped[str] = mapped_column(String(32))
+    home_xg: Mapped[float | None] = mapped_column(Float)
+    away_xg: Mapped[float | None] = mapped_column(Float)
+    home_npxg: Mapped[float | None] = mapped_column(Float)
+    away_npxg: Mapped[float | None] = mapped_column(Float)
+    home_xgot: Mapped[float | None] = mapped_column(Float)          # xG on target
+    away_xgot: Mapped[float | None] = mapped_column(Float)
+    home_big_chances: Mapped[int | None] = mapped_column(SmallInteger)
+    away_big_chances: Mapped[int | None] = mapped_column(SmallInteger)
+    home_box_touches: Mapped[int | None] = mapped_column(SmallInteger)
+    away_box_touches: Mapped[int | None] = mapped_column(SmallInteger)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class SoccerFdcukMatch(ProvenanceMixin, Base):
+    """football-data.co.uk per-match file: match stats (shots, corners, fouls, cards, referee), xG where present, and
+    bookmaker 1X2 / over-under 2.5 prices. ``p_*`` = margin-free 1X2 from the best available price set
+    (``odds_source``: Pinnacle closing > market-average closing > Pinnacle > market average)."""
+    __tablename__ = "soccer_fdcuk_matches"
+    game_id: Mapped[int] = mapped_column(ForeignKey("soccer_games.game_id"), primary_key=True)
+    competition: Mapped[str] = mapped_column(String(32))
+    referee: Mapped[str | None] = mapped_column(String(64))
+    home_shots: Mapped[int | None] = mapped_column(SmallInteger)
+    away_shots: Mapped[int | None] = mapped_column(SmallInteger)
+    home_sot: Mapped[int | None] = mapped_column(SmallInteger)
+    away_sot: Mapped[int | None] = mapped_column(SmallInteger)
+    home_corners: Mapped[int | None] = mapped_column(SmallInteger)
+    away_corners: Mapped[int | None] = mapped_column(SmallInteger)
+    home_fouls: Mapped[int | None] = mapped_column(SmallInteger)
+    away_fouls: Mapped[int | None] = mapped_column(SmallInteger)
+    home_yellow: Mapped[int | None] = mapped_column(SmallInteger)
+    away_yellow: Mapped[int | None] = mapped_column(SmallInteger)
+    home_red: Mapped[int | None] = mapped_column(SmallInteger)
+    away_red: Mapped[int | None] = mapped_column(SmallInteger)
+    home_xg: Mapped[float | None] = mapped_column(Float)
+    away_xg: Mapped[float | None] = mapped_column(Float)
+    odds_source: Mapped[str | None] = mapped_column(String(24))
+    p_home: Mapped[float | None] = mapped_column(Float)
+    p_draw: Mapped[float | None] = mapped_column(Float)
+    p_away: Mapped[float | None] = mapped_column(Float)
+    p_home_open: Mapped[float | None] = mapped_column(Float)     # market average before the close (line movement)
+    p_draw_open: Mapped[float | None] = mapped_column(Float)
+    p_away_open: Mapped[float | None] = mapped_column(Float)
+    p_over25: Mapped[float | None] = mapped_column(Float)
+
+
+class SoccerFplPlayer(ProvenanceMixin, Base):
+    """Fantasy Premier League player per season: position, club (ESPN id) and -- for the current season -- the
+    official availability flag and chance of playing next round."""
+    __tablename__ = "soccer_fpl_players"
+    season: Mapped[int] = mapped_column(SmallInteger, primary_key=True)
+    element_id: Mapped[int] = mapped_column(Integer, primary_key=True)     # FPL player id (per season)
+    code: Mapped[int | None] = mapped_column(Integer, index=True)          # FPL code: stable across seasons
+    name: Mapped[str] = mapped_column(String(80))
+    web_name: Mapped[str] = mapped_column(String(40))
+    position: Mapped[str] = mapped_column(String(3))                        # GK / DEF / MID / FWD
+    team_id: Mapped[int | None] = mapped_column(Integer)                   # ESPN team id
+    status: Mapped[str | None] = mapped_column(String(2))                  # a available, d doubtful, i injured, s suspended, u unavailable
+    chance_next: Mapped[int | None] = mapped_column(SmallInteger)          # % chance of playing next round (NULL = no news)
+    news: Mapped[str | None] = mapped_column(String(300))
+
+
+class SoccerFplPlayerGame(ProvenanceMixin, Base):
+    """One player's FPL line for one Premier League match (history from 2019-20, xG from 2022-23)."""
+    __tablename__ = "soccer_fpl_player_games"
+    season: Mapped[int] = mapped_column(SmallInteger, primary_key=True)
+    element_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    fixture_id: Mapped[int] = mapped_column(Integer, primary_key=True)     # FPL fixture id (per season)
+    game_id: Mapped[int | None] = mapped_column(ForeignKey("soccer_games.game_id"), index=True)
+    team_id: Mapped[int | None] = mapped_column(Integer)
+    was_home: Mapped[bool] = mapped_column(Boolean)
+    minutes: Mapped[int] = mapped_column(SmallInteger)
+    starts: Mapped[int | None] = mapped_column(SmallInteger)
+    goals: Mapped[int] = mapped_column(SmallInteger)
+    assists: Mapped[int] = mapped_column(SmallInteger)
+    clean_sheets: Mapped[int | None] = mapped_column(SmallInteger)
+    goals_conceded: Mapped[int | None] = mapped_column(SmallInteger)
+    saves: Mapped[int | None] = mapped_column(SmallInteger)
+    yellow: Mapped[int | None] = mapped_column(SmallInteger)
+    red: Mapped[int | None] = mapped_column(SmallInteger)
+    bonus: Mapped[int | None] = mapped_column(SmallInteger)
+    bps: Mapped[int | None] = mapped_column(SmallInteger)
+    xg: Mapped[float | None] = mapped_column(Float)
+    xa: Mapped[float | None] = mapped_column(Float)
+    xgc: Mapped[float | None] = mapped_column(Float)                        # expected goals conceded while on the pitch
+    total_points: Mapped[int | None] = mapped_column(SmallInteger)
+
+
+class SoccerClubElo(ProvenanceMixin, Base):
+    """Club Elo (clubelo.com) rating history: one row per club per rating interval [from_date, to_date].
+    ``team_id`` = the ESPN club it maps to (NULL for clubs we don't cover). European clubs only."""
+    __tablename__ = "soccer_clubelo"
+    club: Mapped[str] = mapped_column(String(40), primary_key=True)
+    from_date: Mapped[date] = mapped_column(Date, primary_key=True)
+    to_date: Mapped[date] = mapped_column(Date)
+    team_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    country: Mapped[str | None] = mapped_column(String(3))
+    level: Mapped[int | None] = mapped_column(SmallInteger)
+    elo: Mapped[float] = mapped_column(Float)
+
+
+class SoccerOddsSnapshot(ProvenanceMixin, Base):
+    """Append-only 1X2 price history from The Odds API (Pinnacle, Betfair exchange, European books): one row per
+    match x book x fetch, so line movement between opening and kickoff can be measured. Probabilities have the
+    book's margin removed (proportional)."""
+    __tablename__ = "soccer_odds_snapshots"
+    game_id: Mapped[int] = mapped_column(ForeignKey("soccer_games.game_id"), primary_key=True)
+    provider: Mapped[str] = mapped_column(String(64), primary_key=True)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
+    competition: Mapped[str] = mapped_column(String(32))
+    home_dec: Mapped[float] = mapped_column(Float)        # decimal odds
+    draw_dec: Mapped[float] = mapped_column(Float)
+    away_dec: Mapped[float] = mapped_column(Float)
+    p_home: Mapped[float] = mapped_column(Float)
+    p_draw: Mapped[float] = mapped_column(Float)
+    p_away: Mapped[float] = mapped_column(Float)
+    book_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    minutes_to_kickoff: Mapped[int] = mapped_column(Integer)
+
+
 class SoccerOdds(ProvenanceMixin, Base):
     """Full-time result (1X2) and total-goals line per match from ESPN's odds feed: the median across every
     pre-match sportsbook ESPN lists (in-play "Live Odds" feeds and settled prices are skipped). Probabilities have

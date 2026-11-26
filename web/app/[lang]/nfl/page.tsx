@@ -1,6 +1,5 @@
 import Link from "next/link";
 import { Suspense } from "react";
-
 import { GameCard, GameCardSkeleton } from "@/components/GameCard";
 import { Card, EmptyState, Gauge, Pill, ProbBar, TeamBadge } from "@/components/ui";
 import { api } from "@/lib/api";

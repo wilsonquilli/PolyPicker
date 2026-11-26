@@ -318,6 +318,14 @@ def polymarket_prices(date_from: date | None = None, date_to: date | None = None
             "meta": prediction_meta(extra={"source": "Polymarket (gamma-api.polymarket.com, clob.polymarket.com)"})}
 
 
+@router.get("/line-movement")
+@cached(ttl=300)
+def line_movement_nba(kind: str = Query("live", pattern="^(live|backtest)$"), conn: Connection = Depends(get_conn)):
+    """Opening -> closing line moves vs our picks (see api/linemove.py)."""
+    from polypicker.api.linemove import line_movement
+    return {"data": line_movement(conn, "nba", kind), "meta": prediction_meta()}
+
+
 @router.get("/models/performance")
 @cached(ttl=300)
 def model_performance(kind: Kind | None = None, season: int | None = None,

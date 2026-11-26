@@ -225,7 +225,7 @@ export function BottomNav() {
     ? (t.href === "/nfl" ? path === "/nfl" || path.startsWith("/nfl/games") || path.startsWith("/nfl/players")
       : t.href === "/more" ? path.startsWith("/more") : path.startsWith(t.href))
     : t.view ? path === "/nba" && view === t.view
-      : t.href === "/more" ? ["/more", "/nba/teams", "/nba/value", "/nba/accuracy", "/nba/players", "/methodology", "/install"].some((p) => path.startsWith(p))
+      : t.href === "/more" ? ["/more", "/bets", "/nba/teams", "/nba/value", "/nba/accuracy", "/nba/players", "/methodology", "/install"].some((p) => path.startsWith(p))
         : path.startsWith(t.href);
   return (
     <nav aria-label={tr("Primary")} className="fixed inset-x-0 bottom-0 z-40 border-t border-line bg-bg/95 pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden">

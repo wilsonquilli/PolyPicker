@@ -2,13 +2,13 @@
 data/*
 !data/README.md
 
-# Local tool settings / secrets
+#Local tool settings / secrets
 .claude/settings.local.json
 .env
 .env.*
 !.env.example
 
-# OS / editor
+#OS / editor
 .DS_Store
 .vscode/
 .idea/

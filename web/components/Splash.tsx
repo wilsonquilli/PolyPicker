@@ -1,30 +1,15 @@
 "use client";
 
 import { useEffect, useState, useSyncExternalStore } from "react";
-
-/**
- * Launch screen for the web (iOS and Android installed apps get their own from public/splash and the manifest; this
- * one looks the same, so an installed app hands off seamlessly). Server-rendered, so it covers the page from the
- * first paint, then fades out once the app is ready: at most once per browser session.
- *
- * - The boot script (layout) marks the session before paint, so repeat page loads hide it via CSS
- *   (`pp-splash-seen`) even if this component's JavaScript never loads.
- * - If JavaScript never runs, a CSS animation fades it out anyway (never traps the page).
- */
-const MIN_MS = 900;          // from navigation start: long enough to read, short enough not to annoy
-const MIN_MS_INSTALLED = 400; // the phone already showed its own launch screen
+const MIN_MS = 900;         
+const MIN_MS_INSTALLED = 400; 
 const FADE_MS = 380;
-
-// Read once per page load (before the effect below marks the session), plus "already shown during this page load":
-// a later client-only remount of the layout (language switch) must never show it again.
-// The boot script in the layout marks the session before paint and sets window.__ppSplashFirst on the first load.
 let seenAtLoad = false;
 try { seenAtLoad = typeof window !== "undefined" && !(window as { __ppSplashFirst?: number }).__ppSplashFirst; } catch {}
 let shownThisLoad = false;
 const noSubscribe = () => () => {};
 
 export function Splash() {
-  // Hydration uses the server value (not seen) so the markup matches; client-only mounts read the real value.
   const skip = useSyncExternalStore(noSubscribe, () => seenAtLoad || shownThisLoad, () => false);
   const [phase, setPhase] = useState<"in" | "out" | "gone">("in");
   useEffect(() => {

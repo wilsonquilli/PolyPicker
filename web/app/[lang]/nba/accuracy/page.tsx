@@ -6,6 +6,7 @@ import { Card, EmptyState, Pill, SectionTitle, Skeleton } from "@/components/ui"
 import { api } from "@/lib/api";
 import { shortDate } from "@/lib/format";
 import { keyed, type T } from "@/lib/i18n";
+import { LineMovement } from "@/components/LineMovement";
 import { getLang, getT } from "@/lib/i18n/server";
 
 export async function generateMetadata() {
@@ -170,6 +171,7 @@ async function Accuracy({ searchParams }: { searchParams: SP }) {
               </table>
             </Card>
           </div>
+          <Suspense fallback={<Skeleton className="h-64" />}><LineMovement base="" kind={kind} /></Suspense>
         </>
       )}
     </>

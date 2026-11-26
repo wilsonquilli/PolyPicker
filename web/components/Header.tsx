@@ -27,7 +27,8 @@ export async function Header() {
         <div className="hidden flex-1 md:block"><SearchTrigger variant="bar" /></div>
         <nav className="ml-auto flex items-center gap-1 text-sm">
           <span className="md:hidden"><SearchTrigger variant="icon" /></span>
-          <Link href="/methodology" className="hidden rounded-lg px-3 py-1.5 font-medium text-muted hover:bg-surface-2 hover:text-ink sm:block">{t("How it works")}</Link>
+          <Link href="/bets" className="hidden rounded-lg px-3 py-1.5 font-medium text-muted hover:bg-surface-2 hover:text-ink sm:block">{t("My bets")}</Link>
+          <Link href="/methodology" className="hidden rounded-lg px-3 py-1.5 font-medium text-muted hover:bg-surface-2 hover:text-ink lg:block">{t("How it works")}</Link>
           <LanguageToggle />
           <GetAppLink />
           <ThemeToggle />

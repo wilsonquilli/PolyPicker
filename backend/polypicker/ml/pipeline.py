@@ -48,22 +48,77 @@ class FeatureSet:
 
 
 INJURY_SOURCE = "ESPN injury report"
+OFFICIAL_SOURCE = "official NBA injury report"
 BOX_SOURCE = "inferred from recent box scores (player not on the injury report)"
 
 
 def load_injuries(engine: Engine) -> dict[tuple[int, int], dict]:
-    """Latest ESPN report per listed player (empty if the feed has never been synced)."""
+    """Latest listed status per (team, player): the official NBA report for every team that filed in the
+    newest report (it supersedes ESPN for that team), ESPN's list for the rest. Empty if neither is synced.
+
+    Validated 2026-11-24 on 2026-27 (no-market model, n=269): pregame availability from box scores alone
+    62.8%, from the 5 PM official report 65.4%, from who actually played 65.1% -- the report recovers the
+    full value of knowing who plays. With a closing line in the model the three are equal (priced in)."""
     from polypicker.etl.sources.espn_injuries import latest_reports, status_weight
+    from polypicker.etl.sources.nba_injury_pdf import NOT_SUBMITTED, TEAM_ROW, latest_official
+    from polypicker.etl.sources.nba_injury_pdf import status_weight as official_weight
+    out = {}
     try:
         rep = latest_reports(engine)
     except Exception as e:  # noqa: BLE001 -- table missing / DB hiccup: fall back to box-score availability
         log.warning("injury report unavailable: %s", e)
-        return {}
-    out = {}
+        rep = pl.DataFrame()
     for r in rep.iter_rows(named=True) if rep.height else []:
         if r["player_id"] is not None:
-            out[(r["team_id"], r["player_id"])] = {**r, "weight": status_weight(r["status"])}
+            out[(r["team_id"], r["player_id"])] = {**r, "weight": status_weight(r["status"]), "source": INJURY_SOURCE}
+    off = latest_official(engine)
+    if off.height:
+        filed = set(off.filter(pl.col("status") != NOT_SUBMITTED)["team_id"].to_list())
+        out = {k: v for k, v in out.items() if k[0] not in filed}
+        for r in off.filter((pl.col("player_name") != TEAM_ROW) & pl.col("player_id").is_not_null()).iter_rows(named=True):
+            out[(r["team_id"], r["player_id"])] = {"team_id": r["team_id"], "player_id": r["player_id"],
+                                                   "player_name": r["player_name"], "status": r["status"],
+                                                   "detail": r["reason"], "weight": official_weight(r["status"]),
+                                                   "source": OFFICIAL_SOURCE}
     return out
+
+
+LINEUP_SOURCE = "official NBA game-day inactive list"
+LINEUP_WINDOW = (timedelta(0), timedelta(minutes=90))  # fetch for games tipping within the next 90 minutes
+
+
+def load_confirmed_lineups(games: pl.DataFrame, now: datetime | None = None,
+                           fetch=None) -> tuple[dict[tuple[int, int], dict], set[int]]:
+    """Game-day active/inactive lists + starters from NBA.com's pregame box score (published ~30 minutes
+    before tip). -> ({(team_id, player_id): entry}, team_ids with a confirmed list). An inactive player is
+    out (weight 0), an active one plays (1); a rotation player missing from the list isn't on the team."""
+    from polypicker.etl.sources.nba_live import fetch_boxscore
+    fetch = fetch or fetch_boxscore
+    now = now or datetime.now(timezone.utc)
+    soon = games.filter((pl.col("status") == "scheduled")
+                        & pl.col("tipoff_utc").is_between(now + LINEUP_WINDOW[0], now + LINEUP_WINDOW[1]))
+    entries: dict[tuple[int, int], dict] = {}
+    teams: set[int] = set()
+    for gid in soon["game_id"].to_list():
+        try:
+            box = fetch(gid)
+        except Exception:  # noqa: BLE001 -- not published yet (403) or feed down: keep the injury report
+            continue
+        g = box.get("game", box)
+        for side in ("homeTeam", "awayTeam"):
+            t = g.get(side) or {}
+            players = t.get("players") or []
+            if not t.get("teamId") or not any(p.get("status") for p in players):
+                continue
+            teams.add(int(t["teamId"]))
+            for pl_ in players:
+                active = pl_.get("status") == "ACTIVE"
+                why = (pl_.get("notPlayingReason") or "").replace("INACTIVE_", "").replace("_", " ").title() or None
+                entries[(int(t["teamId"]), int(pl_["personId"]))] = {
+                    "team_id": int(t["teamId"]), "player_id": int(pl_["personId"]), "player_name": pl_.get("name"),
+                    "status": ("Starting" if pl_.get("starter") == "1" else "Active") if active else "Inactive",
+                    "detail": why, "weight": 1.0 if active else 0.0, "source": LINEUP_SOURCE}
+    return entries, teams
 
 
 MARGIN_PER_SD = 12.0  # NBA final-margin spread around expectation (~12 pts): converts a win price to a margin
@@ -76,8 +131,12 @@ def add_market_features(gd: pl.DataFrame) -> pl.DataFrame:
         (pl.col("book_total") / 2).alias("mkt_total_half"))
 
 
+_MARKET_COLS = ("market_p_home", "polymarket_p_home", "book_spread_home", "book_total", "pm_p_home", "kalshi_p_home",
+                "pin_home_ml", "pin_away_ml")
+
+
 def load_market(engine: Engine) -> pl.DataFrame:
-    """Closing sportsbook probability per game (benchmark only -- not a model input)."""
+    """Market prices per game: closing benchmarks plus the model's market inputs (books, Polymarket, Kalshi)."""
     try:
         df = mdata._read(engine, """
             SELECT g.game_id,
@@ -85,21 +144,29 @@ def load_market(engine: Engine) -> pl.DataFrame:
                    x.p_home_pregame AS polymarket_p_home,                            -- benchmark (last pre-tip price)
                    o.spread_home AS book_spread_home, o.total AS book_total,         -- model inputs: latest line
                    CASE WHEN g.status = 'scheduled' THEN coalesce(x.p_home_live, x.p_home_pregame)
-                        ELSE coalesce(x.p_home_pregame, x.p_home_live) END AS pm_p_home
+                        ELSE coalesce(x.p_home_pregame, x.p_home_live) END AS pm_p_home,
+                   CASE WHEN g.status = 'scheduled' THEN coalesce(k.p_home_live, k.p_home_pregame)
+                        ELSE coalesce(k.p_home_pregame, k.p_home_live) END AS kalshi_p_home,
+                   pin.home_ml AS pin_home_ml, pin.away_ml AS pin_away_ml
             FROM games g LEFT JOIN nba_odds o ON o.game_id = g.game_id
             LEFT JOIN polymarket_nba x ON x.game_id = g.game_id
-            WHERE o.game_id IS NOT NULL OR x.game_id IS NOT NULL""",
-                         schema_overrides={c: pl.Float64 for c in ("market_p_home", "polymarket_p_home", "book_spread_home",
-                                                                     "book_total", "pm_p_home")} | {"game_id": pl.Int64})
+            LEFT JOIN kalshi_nba k ON k.game_id = g.game_id
+            LEFT JOIN nba_odds_books pin ON pin.game_id = g.game_id AND pin.provider = 'Pinnacle'
+            WHERE o.game_id IS NOT NULL OR x.game_id IS NOT NULL OR k.game_id IS NOT NULL""",
+                         schema_overrides={c: pl.Float64 for c in _MARKET_COLS} | {"game_id": pl.Int64})
     except Exception as e:  # noqa: BLE001
         log.warning("market prices unavailable: %s", e)
-        df = pl.DataFrame(schema={"game_id": pl.Int64} | {c: pl.Float64 for c in (
-            "market_p_home", "polymarket_p_home", "book_spread_home", "book_total", "pm_p_home")})
+        df = pl.DataFrame(schema={"game_id": pl.Int64} | {c: pl.Float64 for c in _MARKET_COLS})
     from scipy.stats import norm
-    pm = df["pm_p_home"].to_numpy().astype(float)
-    pm_margin = MARGIN_PER_SD * norm.ppf(pm.clip(0.02, 0.98))         # NaN stays NaN
+    to_margin = lambda col: MARGIN_PER_SD * norm.ppf(df[col].to_numpy().astype(float).clip(0.02, 0.98))  # noqa: E731 (NaN stays NaN)
     book_margin = -df["book_spread_home"].to_numpy().astype(float)
-    both = np.vstack([pm_margin, book_margin])
+    # Kalshi joined the consensus 2026-11-24: log loss 0.5780 -> 0.5775 (2025-26) and 0.5703 -> 0.5701 (2026-27).
+    # Pinnacle (The Odds API, live only since 2026-11-24 -- no backtest yet; re-check once graded games pile up).
+    from polypicker.etl.sources.espn_odds import no_vig_home
+    pin = np.array([no_vig_home(h, a) if h is not None and a is not None else np.nan
+                    for h, a in zip(df["pin_home_ml"].to_list(), df["pin_away_ml"].to_list())], dtype=float)
+    pin_margin = MARGIN_PER_SD * norm.ppf(pin.clip(0.02, 0.98))
+    both = np.vstack([to_margin("pm_p_home"), to_margin("kalshi_p_home"), book_margin, pin_margin])
     with np.errstate(all="ignore"):
         mkt_margin_home = np.nanmean(np.where(np.isfinite(both), both, np.nan), axis=0)
     return df.with_columns(pl.Series("mkt_margin_home", mkt_margin_home).fill_nan(None))
@@ -112,14 +179,18 @@ def build_features(engine: Engine) -> FeatureSet:
     tf = build_team_features(games, tb)
     mf = matchup_frame(tf)
     injuries = load_injuries(engine)
+    confirmed, confirmed_teams = load_confirmed_lineups(games)
+    if confirmed_teams:  # the game-day list supersedes both injury reports for those teams
+        injuries = {k: v for k, v in injuries.items() if k[0] not in confirmed_teams} | confirmed
 
     def availability(_gid: int, team: int, pid: int) -> float | None:
         # With a fresh report, not being listed means available; without one, fall back to box scores.
+        # A team with a confirmed game-day list: anyone not on it isn't with the team.
         if not injuries:
             return None
         r = injuries.get((team, pid))
         if r is None:
-            return 1.0
+            return 0.0 if team in confirmed_teams else 1.0
         return r["weight"] if r["weight"] is not None else 1.0
 
     lineup = build_lineup_features(games, load_player_impact_box(engine), availability)
@@ -138,11 +209,13 @@ def _apply_injuries(cands: pl.DataFrame, injuries: dict) -> pl.DataFrame:
     for r in cands.iter_rows(named=True):
         rep = injuries.get((r["team_id"], r["player_id"])) if r["status"] == "scheduled" else None
         r["availability_source"] = BOX_SOURCE
-        if rep:
+        if rep and rep["status"].lower() in ("available", "active", "starting"):
+            r["availability_source"] = rep.get("source", INJURY_SOURCE)
+        elif rep:
             st = rep["status"].lower()
             why = f"{rep['status']} ({rep['detail']})" if rep["detail"] else rep["status"]
-            r["availability_source"] = INJURY_SOURCE
-            if st == "out":
+            r["availability_source"] = rep.get("source", INJURY_SOURCE)
+            if st in ("out", "inactive"):
                 r.update(availability="likely_out", availability_reason=f"{why} on the injury report", excluded=True)
             elif st == "doubtful":
                 r.update(availability="doubtful", availability_reason=f"{why} on the injury report", excluded=False)
@@ -193,15 +266,15 @@ def train_models(engine: Engine, fs: FeatureSet, validation_season: int, *, acti
 def _register(engine, target, version, algo, obj, art_dir: Path, t_start, t_end, v_start, v_end, params, metrics_,
               activate) -> int:
     path = art_dir / f"{target}-{version}.pkl"
-    with open(path, "wb") as f:
-        pickle.dump(obj, f)
+    blob = pickle.dumps(obj)
+    path.write_bytes(blob)
     with engine.begin() as conn:
         if activate:
             conn.execute(update(m.Model).where(m.Model.target == target).values(is_active=False))
         mid = conn.execute(insert(m.Model).values(
             target=target, version=version, algorithm=algo, train_start=t_start, train_end=t_end,
             validation_start=v_start, validation_end=v_end, params=params, metrics=metrics_,
-            artifact_path=str(path), is_active=activate).returning(m.Model.id)).scalar_one()
+            artifact_path=str(path), artifact_blob=blob, is_active=activate).returning(m.Model.id)).scalar_one()
         conn.execute(insert(m.AdminAuditEvent).values(
             actor="cli", action="model_registered",
             detail={"model_id": mid, "target": target, "version": version, "activated": activate}))
@@ -209,10 +282,20 @@ def _register(engine, target, version, algo, obj, art_dir: Path, t_start, t_end,
 
 
 def load_model(engine: Engine, model_id: int):
+    """The model's pickle: from its file when this machine has it (local dev), else from the database copy
+    (servers without the artifacts folder, e.g. Render)."""
     with engine.connect() as conn:
         path = conn.execute(select(m.Model.artifact_path).where(m.Model.id == model_id)).scalar_one()
-    with open(path, "rb") as f:
-        return pickle.load(f)
+        local = Path(path) if path else None
+        if local is not None and not local.exists():
+            local = get_settings().resolved_artifacts_dir() / local.name
+        if local is not None and local.exists():
+            return pickle.loads(local.read_bytes())
+        blob = conn.execute(select(m.Model.artifact_blob).where(m.Model.id == model_id)).scalar_one()
+    if blob is None:
+        raise RuntimeError(f"model {model_id}: no artifact file at {path} and no copy in the database; "
+                           "run `polypicker db store-models` where the file exists")
+    return pickle.loads(blob)
 
 
 def active_model_ids(engine: Engine) -> dict[str, int]:
@@ -294,7 +377,7 @@ def _absences(fs: FeatureSet, game_ids: list[int]) -> dict[int, dict]:
             rep = (fs.injuries or {}).get((r["team_id"], p["player_id"]))
             players.append({"player_id": p["player_id"], "name": (fs.player_names or {}).get(p["player_id"]),
                             "status": rep["status"] if rep else "Out", "detail": rep["detail"] if rep else None,
-                            "source": INJURY_SOURCE if rep else "inactive in each of the team's last 2 games",
+                            "source": rep.get("source", INJURY_SOURCE) if rep else "inactive in each of the team's last 2 games",
                             "usual_minutes": p["exp_minutes"]})
         side = "home" if home.get(r["game_id"]) == r["team_id"] else "away"
         out.setdefault(r["game_id"], {})[side] = {"team_id": r["team_id"], "players": players,

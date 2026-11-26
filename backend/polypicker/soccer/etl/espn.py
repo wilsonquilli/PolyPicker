@@ -14,6 +14,7 @@ from __future__ import annotations
 import re
 
 import logging
+import threading
 import time
 from datetime import date, datetime, timedelta, timezone
 from typing import Callable
@@ -40,6 +41,8 @@ STAT_MAP = {"totalShots": "shots", "shotsOnTarget": "shots_on_target", "possessi
 FLOAT_STATS = {"possession", "pass_pct"}
 
 Getter = Callable[[str, dict], dict]
+_LOCK = threading.Lock()
+FULL_EVERY = timedelta(hours=20)   # quick syncs in between only re-read dates that already have a match
 
 
 
@@ -221,8 +224,9 @@ def calendar_dates(cal: list) -> list[date]:
 class EspnSoccerSource:
     code = "espn_soccer"
 
-    def __init__(self, engine: Engine, competition: str = "eng.1", *, get: Getter | None = None, pause: float = 0.25):
-        self.engine, self.comp, self.get, self.pause = engine, competition, get or http_get, pause
+    def __init__(self, engine: Engine, competition: str = "eng.1", *, get: Getter | None = None, pause: float = 0.25,
+                 workers: int = 4):
+        self.engine, self.comp, self.get, self.pause, self.workers = engine, competition, get or http_get, pause, workers
         self.summary: dict = {"dates": 0, "events": 0, "summaries": 0, "failed": 0}
 
     def _call(self, path: str, params: dict, issues: IssueLog, backoff: tuple[float, ...] = (2, 10, 30)) -> dict | None:
@@ -238,7 +242,8 @@ class EspnSoccerSource:
             except Exception as e:  # noqa: BLE001
                 status = getattr(getattr(e, "response", None), "status_code", None)
                 if (status is not None and status < 500) or i == len(backoff):
-                    self.summary["failed"] += 1
+                    with _LOCK:
+                        self.summary["failed"] += 1
                     issues.add("soccer", f"{path}?{params}", "espn_fetch_failed", "warning", "skipped", error=str(e)[:200])
                     break
         if self.pause:
@@ -252,9 +257,17 @@ class EspnSoccerSource:
         return calendar_dates(((board.get("leagues") or [{}])[0]).get("calendar") or [])
 
     def collect(self, dates: list[date], issues: IssueLog) -> tuple[list[dict], dict[int, dict]]:
+        """One scoreboard call per date, ``workers`` at a time (each worker keeps the polite pause between calls);
+        results are parsed in date order, so the outcome is the same as a serial fetch."""
+        from concurrent.futures import ThreadPoolExecutor
         games, teams = {}, {}
-        for d in dates:
-            board = self._call("scoreboard", {"dates": d.strftime("%Y%m%d")}, issues)
+        fetch = lambda d: self._call("scoreboard", {"dates": d.strftime("%Y%m%d")}, issues)  # noqa: E731
+        if self.workers > 1 and len(dates) > 1:
+            with ThreadPoolExecutor(max_workers=self.workers) as ex:
+                boards = list(ex.map(fetch, dates))
+        else:
+            boards = [fetch(d) for d in dates]
+        for board in boards:
             self.summary["dates"] += 1
             for ev in (board or {}).get("events") or []:
                 parsed = parse_scoreboard_event(ev, self.comp)
@@ -416,26 +429,54 @@ def ingest_espn(engine: Engine, seasons: list[int], competition: str = "eng.1", 
                    retries=retries, backoff_seconds=30)
 
 
+def _last_full_sync(engine: Engine, competition: str) -> datetime | None:
+    with engine.connect() as c:
+        return c.execute(text("""SELECT max(finished_at) FROM ingestion_runs WHERE job = 'soccer_espn_sync'
+                                 AND status = 'succeeded' AND params @> CAST(:p AS jsonb)"""),
+                         {"p": f'{{"competition": "{competition}", "mode": "full"}}'}).scalar()
+
+
+def known_dates(engine: Engine, competition: str, start: date, end: date) -> list[date]:
+    """Match dates (US-Eastern) in [start, end] with a match we haven't seen finish -- all a quick sync re-reads."""
+    with engine.connect() as c:
+        return [r[0] for r in c.execute(text("""
+            SELECT DISTINCT game_date FROM soccer_games
+            WHERE competition = :c AND game_date BETWEEN :a AND :b AND status NOT IN ('final', 'canceled')
+            ORDER BY 1"""), {"c": competition, "a": start, "b": end})]
+
+
 def sync_espn(engine: Engine, competition: str = "eng.1", *, back_days: int = 10, ahead_days: int = 60,
-              retries: int = 2, get: Getter | None = None) -> dict:
-    """Daily: recent results (+ stats) and upcoming fixtures for match dates in [today-back, today+ahead]."""
+              retries: int = 2, get: Getter | None = None, full: bool | None = None) -> dict:
+    """Recent results (+ stats) and upcoming fixtures for match dates in [today-back, today+ahead].
+
+    ``full`` walks every calendar date in the window (finds new fixtures, cup draws, rescheduled matches); a quick
+    sync only re-reads today plus dates that already hold an unfinished match (results, kickoff changes) --
+    ~5-15 calls instead of 20-70. ``None`` = full when the last full sync is older than ``FULL_EVERY``."""
     src = EspnSoccerSource(engine, competition, get=get)
+    if full is None:
+        last = _last_full_sync(engine, competition)
+        full = last is None or datetime.now(timezone.utc) - last > FULL_EVERY
 
     def run(run_id: int, source_id: int, issues: IssueLog) -> dict:
         today = datetime.now(ET).date()
         lg = BY_COMPETITION.get(competition)
         season = lg.current_season(today) if lg else (today.year if today.month >= 7 else today.year - 1)
-        cal = src.season_dates(season, issues)
-        window = [d for d in cal if today - timedelta(days=back_days) <= d <= today + timedelta(days=ahead_days)]
+        start, end = today - timedelta(days=back_days), today + timedelta(days=ahead_days)
+        if full:
+            cal = src.season_dates(season, issues)
+            window = [d for d in cal if start <= d <= end]
+        else:
+            window = sorted(set(known_dates(engine, competition, start, end)) | {today})
+            cal = window
         games, teams = src.collect(window, issues)
         stats = src.enrich(games, _have_stats(engine, [g["game_id"] for g in games]), issues)
         if cal and not games and src.summary["failed"] >= 2:
             raise RuntimeError("ESPN soccer scoreboard unavailable")
         prov = {"source_id": source_id, "ingestion_run_id": run_id, "source_updated_at": datetime.now(timezone.utc)}
-        out = {"window_dates": len(window), "source": src.summary, **_store(engine, src, games, teams, stats, prov)}
+        out = {"mode": "full" if full else "quick", "window_dates": len(window), "source": src.summary, **_store(engine, src, games, teams, stats, prov)}
         if _wants_groups(competition) and games:
             out["groups"] = store_groups(engine, competition, season, prov, issues)
         return {**out, "_source_updated_at": datetime.now(timezone.utc)}
 
-    return tracked(engine, src.code, "soccer_espn_sync", {"competition": competition}, run, retries=retries,
-                   backoff_seconds=20)
+    return tracked(engine, src.code, "soccer_espn_sync", {"competition": competition, "mode": "full" if full else "quick"},
+                   run, retries=retries, backoff_seconds=20)

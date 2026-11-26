@@ -1,10 +1,10 @@
 import Link from "next/link";
 import { Suspense } from "react";
-
 import { AccuracyHero, CalibrationCard, KindNote, VsMarketCard } from "@/components/accuracy";
 import { CalibrationChart } from "@/components/charts";
 import { EmptyState, Pill, SectionTitle, Skeleton } from "@/components/ui";
 import { api } from "@/lib/api";
+import { LineMovement } from "@/components/LineMovement";
 import { getT } from "@/lib/i18n/server";
 
 export async function generateMetadata() {
@@ -112,6 +112,7 @@ async function Accuracy({ searchParams }: { searchParams: SP }) {
                 )}
               </>
             ) : undefined} />
+          <Suspense fallback={<Skeleton className="h-64" />}><LineMovement base="/nfl" kind={kind} /></Suspense>
           <details className="rounded-2xl border border-line bg-surface shadow-card">
             <summary className="cursor-pointer px-5 py-4 font-semibold">{t("Advanced stats: every market & training validation")}</summary>
             <div className="overflow-x-auto px-5 pb-5">

@@ -1,6 +1,5 @@
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
-
 import { MarginBars } from "@/components/charts";
 import { GameCard } from "@/components/GameCard";
 import { Breadcrumbs, Card, EmptyState, FormChips, SectionTitle, Skeleton, StatTile, TeamBadge } from "@/components/ui";

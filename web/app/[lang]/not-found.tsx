@@ -1,5 +1,4 @@
 import Link from "next/link";
-
 import { getT } from "@/lib/i18n/server";
 
 export default async function NotFound() {

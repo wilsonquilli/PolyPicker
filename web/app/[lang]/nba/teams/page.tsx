@@ -1,6 +1,5 @@
 import Link from "next/link";
 import { Suspense } from "react";
-
 import { Skeleton, TeamBadge } from "@/components/ui";
 import { api } from "@/lib/api";
 import type { StandingRow } from "@/lib/types";

@@ -9,6 +9,9 @@ import { addDays } from "@/lib/format";
 import { LEAGUES, todayET, whenLabel, type LeagueKey } from "@/lib/home";
 import type { Lang, T } from "@/lib/i18n";
 import { MAX_LEGS, slip, useSlip, type Sport } from "@/lib/slip";
+import { bets } from "@/lib/bets";
+import { UpdatedAt } from "@/components/client";
+import { lastUpdated } from "@/lib/types";
 import { SOCCER_LEAGUES, teamCss, type LeagueSlug } from "@/lib/soccer";
 
 /**
@@ -20,12 +23,14 @@ import { SOCCER_LEAGUES, teamCss, type LeagueSlug } from "@/lib/soccer";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "/api/v1";
 const STAKE = 10;
+const POLL_MS = 60_000;   // re-grade while a leg is live / awaiting its result, so finished games show without a reload
 
 interface Team { team_id: number; abbr: string; name: string; short: string; color?: string | null }
 interface Leg {
   key: string; sport: Sport; league: LeagueSlug | null; game_id: number; pick: "home" | "away" | "draw"; team: Team | null;
   home: Team; away: Team; tipoff_utc: string; game_status: string; home_score: number | null; away_score: number | null;
   result: "won" | "lost" | "void" | null; p_model: number; p_market: number | null; market_source: string | null; href: string;
+  published_at: string; checked_at: string | null; odds_at: string | null;
 }
 interface Combo {
   chance: number; chance_pregame: number; dead: boolean; p_market: number | null; fair_odds: number | null; market_odds: number | null;
@@ -78,9 +83,15 @@ export function ComboGrader() {
   const [loading, setLoading] = useState(false);
   const [copied, setCopied] = useState(false);
   const [inView, setInView] = useState(true);
+  const [tick, setTick] = useState(0);
   const ref = useRef<HTMLElement>(null);
 
   const legsParam = keys.join(",");
+
+  // A combo whose games were all over the last time it was shown starts empty on the next visit.
+  useEffect(() => {
+    slip.clearIfSettled();
+  }, []);
 
   // A shared link (?slip=...) fills the slip once, then the params are dropped from the address bar.
   useEffect(() => {
@@ -115,12 +126,29 @@ export function ComboGrader() {
       } finally {
         if (!ctrl.signal.aborted) setLoading(false);
       }
-    }, 200);
+    }, tick ? 0 : 200);
     return () => {
       clearTimeout(timer);
       ctrl.abort();
     };
-  }, [legsParam, t]);
+  }, [legsParam, t, tick]);
+
+  // Every game over: remember it so the slip clears itself next time. Otherwise, while any game has kicked off
+  // (or is about to), re-grade every minute so live and final results appear on their own.
+  const settled = data?.combo?.settled ?? false;
+  useEffect(() => {
+    if (settled && data && data.legs.length && data.legs.every((l) => keys.includes(l.key)) && data.legs.length === keys.length) {
+      slip.markSettled(keys);
+    }
+  }, [settled, data, keys]);
+  useEffect(() => {
+    if (settled || !data) return;
+    const id = setInterval(() => {
+      const due = data.legs.some((l) => l.result === null && Date.parse(l.tipoff_utc) <= Date.now() + POLL_MS);
+      if (due && document.visibilityState === "visible") setTick((n) => n + 1);
+    }, POLL_MS);
+    return () => clearInterval(id);
+  }, [settled, data]);
 
   useEffect(() => {
     const el = ref.current;
@@ -176,7 +204,9 @@ export function ComboGrader() {
           <div className="flex flex-col gap-3 rounded-2xl border border-line bg-surface p-4 shadow-card lg:col-span-3">
             <div className="flex items-center justify-between gap-2">
               <h3 className="text-sm font-semibold">{t(keys.length === 1 ? "{n} leg" : "{n} legs", { n: keys.length })}</h3>
-              <button type="button" onClick={() => slip.clear()} className="text-xs font-semibold text-muted hover:text-loss">{t("Clear all")}</button>
+              <button type="button" onClick={() => slip.clear()} className="text-xs font-semibold text-muted hover:text-loss">
+                {combo?.settled ? t("Start a new combo") : t("Clear all")}
+              </button>
             </div>
             <ul className="flex flex-col divide-y divide-line">
               {pending && !legs.length
@@ -292,7 +322,9 @@ function Result({ combo, legs, t, lang, loading, onShare, copied }: {
         <div className={`flex h-20 w-20 shrink-0 items-center justify-center rounded-2xl text-4xl font-black ring-1 ${GRADE_TONE[combo.grade[0]]}`}
           role="img" aria-label={t("Grade {g}", { g: combo.grade })}>{combo.grade}</div>
         <div className="min-w-0">
-          <p className="text-[11px] font-semibold uppercase tracking-wider text-muted">{combo.status === "live" ? t("Chance now") : t("Chance to hit")}</p>
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-muted">
+            {combo.settled ? t("Final") : combo.status === "live" ? t("Chance now") : t("Chance to hit")}
+          </p>
           <p className="tabular text-4xl font-bold tracking-tight">{pct(combo.chance)}</p>
           <p className="text-sm text-muted">{headline}</p>
         </div>
@@ -326,6 +358,14 @@ function Result({ combo, legs, t, lang, loading, onShare, copied }: {
         </div>
       )}
 
+      {!combo.settled && <StalestLeg legs={legs} />}
+
+      {combo.settled && (
+        <p className="rounded-xl bg-surface-2 px-3 py-2 text-sm text-muted">{t("Every game in this combo is over. It clears automatically the next time you open PolyPicker.")}</p>
+      )}
+
+      {!combo.settled && !combo.dead && <TrackBet combo={combo} legs={legs} t={t} />}
+
       <div className="mt-auto flex items-center gap-2">
         <button type="button" onClick={onShare} className="flex-1 rounded-full bg-accent px-4 py-2 text-sm font-semibold text-accent-fg hover:opacity-90">
           {copied ? t("Link copied ✓") : t("Share this grade")}
@@ -333,6 +373,78 @@ function Result({ combo, legs, t, lang, loading, onShare, copied }: {
       </div>
     </article>
   );
+}
+
+const matchup = (l: Leg) => (l.sport === "soccer" ? `${l.home.abbr} v ${l.away.abbr}` : `${l.away.abbr} @ ${l.home.abbr}`);
+
+/** "I placed this bet": stake + the odds the user got, saved to My bets (this browser) and graded there. */
+function TrackBet({ combo, legs, t }: { combo: Combo; legs: Leg[]; t: T }) {
+  const [open, setOpen] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const suggested = combo.market_odds ?? combo.fair_odds;
+  const [stake, setStake] = useState("10");
+  const [odds, setOdds] = useState(suggested !== null ? `${suggested > 0 ? "+" : ""}${suggested}` : "");
+  const [book, setBook] = useState("");
+  const started = legs.some((l) => l.game_status !== "scheduled");
+  const stakeN = Number(stake);
+  const oddsN = Number(odds.replace(/\s|\+/g, ""));
+  const ok = stakeN > 0 && Number.isFinite(oddsN) && Math.abs(oddsN) >= 100;
+
+  if (saved) {
+    return (
+      <p className="rounded-xl bg-win/10 px-3 py-2 text-sm text-win">
+        ✓ {t("Saved to My bets.")} <Link href="/bets" className="font-semibold underline">{t("View →")}</Link>
+      </p>
+    );
+  }
+  if (started) return null;   // only bets placed before kickoff are tracked
+  if (!open) {
+    return (
+      <button type="button" onClick={() => setOpen(true)}
+        className="rounded-full border border-accent px-4 py-2 text-sm font-semibold text-accent hover:bg-accent-soft">
+        {t("I placed this bet: track it")}
+      </button>
+    );
+  }
+  const save = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!ok) return;
+    bets.add({
+      legs: legs.map((l) => ({ key: l.key, label: legLabel(l, t), matchup: matchup(l), p_model: l.p_model })),
+      stake: stakeN, odds: oddsN, book: book.trim() || undefined, chance: combo.chance_pregame, market: combo.p_market,
+    });
+    setSaved(true);
+  };
+  const field = "w-full rounded-lg border border-line bg-surface-2 px-2.5 py-1.5 text-sm tabular focus:border-accent focus:outline-none";
+  return (
+    <form onSubmit={save} className="flex flex-col gap-2 rounded-xl bg-surface-2/60 p-3">
+      <div className="grid grid-cols-3 gap-2">
+        <label className="flex flex-col gap-1 text-[11px] text-muted">{t("Stake ($)")}
+          <input inputMode="decimal" value={stake} onChange={(e) => setStake(e.target.value)} className={field} aria-invalid={!(stakeN > 0)} />
+        </label>
+        <label className="flex flex-col gap-1 text-[11px] text-muted">{t("Your odds")}
+          <input inputMode="text" value={odds} onChange={(e) => setOdds(e.target.value)} placeholder="+650" className={field}
+            aria-invalid={!(Math.abs(oddsN) >= 100)} />
+        </label>
+        <label className="flex flex-col gap-1 text-[11px] text-muted">{t("Book (optional)")}
+          <input value={book} onChange={(e) => setBook(e.target.value)} maxLength={40} className={field} />
+        </label>
+      </div>
+      <p className="text-[11px] text-muted">{t("American odds from your sportsbook, e.g. +650 or -120. Saved only on this device.")}</p>
+      <div className="flex gap-2">
+        <button type="submit" disabled={!ok} className="flex-1 rounded-full bg-accent px-4 py-1.5 text-sm font-semibold text-accent-fg disabled:opacity-50">{t("Save bet")}</button>
+        <button type="button" onClick={() => setOpen(false)} className="rounded-full px-3 py-1.5 text-sm text-muted hover:text-ink">{t("Cancel")}</button>
+      </div>
+    </form>
+  );
+}
+
+/** "Updated 4m ago" for the combo: its least recently refreshed open leg, the number that could be out of date. */
+function StalestLeg({ legs }: { legs: Leg[] }) {
+  const open = legs.filter((l) => l.result === null && l.published_at);
+  if (!open.length) return null;
+  const oldest = open.reduce((a, b) => (Date.parse(lastUpdated(b)) < Date.parse(lastUpdated(a)) ? b : a));
+  return <UpdatedAt iso={lastUpdated(oldest)} checked={oldest.checked_at} odds={oldest.odds_at} className="-mt-2 text-[11px] text-muted" />;
 }
 
 function Stat({ label, value, sub }: { label: string; value: string; sub?: string }) {

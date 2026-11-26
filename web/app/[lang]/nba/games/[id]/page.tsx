@@ -1,7 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
-
 import { RelativeTime } from "@/components/client";
 import { DistributionChart } from "@/components/game/DistributionChart";
 import { LineCalculator } from "@/components/game/LineCalculator";
@@ -12,6 +11,7 @@ import { dateTimeET, longDate, pct, seasonTypeLabel, signed } from "@/lib/format
 import type { Factor, TeamAbsences, GameDetail, GameLineMarket, GamePredictions, GameSide, Outcome, SideContext } from "@/lib/types";
 import { keyed, type T } from "@/lib/i18n";
 import { rich } from "@/lib/i18n/rich";
+import { ReasonList } from "@/components/Reasons";
 import { getLang, getT } from "@/lib/i18n/server";
 
 type Params = Promise<{ id: string }>;
@@ -46,10 +46,8 @@ async function GameContent({ params }: { params: Params }) {
       <Breadcrumbs items={[{ href: "/nba", label: "NBA" }, { label: seasonTypeLabel(g.season_type) },
         { href: `/nba?date=${g.game_date}`, label: longDate(g.game_date, lang) }]} />
 
-      {/* Event header */}
       <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
         <div className="flex items-center gap-3 sm:gap-4">
-          {/* Smaller badges on phones so the title isn't squeezed into a narrow column */}
           <div className="flex shrink-0 gap-1 sm:hidden">
             <TeamBadge abbr={g.away.abbreviation} size={36} />
             <TeamBadge abbr={g.home.abbreviation} size={36} />
@@ -86,7 +84,6 @@ async function GameContent({ params }: { params: Params }) {
             </EmptyState>
           ) : (
             <>
-              {/* Headline probabilities + chart */}
               <Card className="p-5">
                 <HeadlineOdds g={g} p={p!} />
                 <div className="mt-5">
@@ -95,7 +92,6 @@ async function GameContent({ params }: { params: Params }) {
                 </div>
               </Card>
 
-              {/* Outcome rows */}
               <Card className="overflow-hidden">
                 <div className="grid grid-cols-[1fr_auto_auto] items-center gap-x-6 border-b border-line px-5 py-2.5 text-[11px] font-semibold uppercase tracking-wide text-muted">
                   <span>{t("Outcome")}</span><span className="text-right">{t("Proj. pts")}</span><span className="w-20 text-right">{t("% chance")}</span>
@@ -128,7 +124,6 @@ async function GameContent({ params }: { params: Params }) {
                 )}
               </Card>
 
-              {/* Spread & total lines */}
               <div className="grid gap-4 md:grid-cols-2">
                 <LinesCard kind="spread" title={t("Spread")} market={m.spread} unit={t("{team} margin", { team: g.home.abbreviation })} homeAbbr={g.home.abbreviation} awayAbbr={g.away.abbreviation} />
                 <LinesCard kind="total" title={t("Total points")} market={m.total} unit={t("combined points")} homeAbbr={g.home.abbreviation} awayAbbr={g.away.abbreviation} />
@@ -186,8 +181,11 @@ async function GameContent({ params }: { params: Params }) {
           <Rules />
         </div>
 
-        {/* Side panel */}
         <aside className="flex flex-col gap-4 lg:sticky lg:top-32 lg:self-start">
+          {g.status === "scheduled" && g.prediction && (
+            <ReasonList reasons={g.reasons} pick={g.prediction.favorite} teams={{ home: g.home.name, away: g.away.name }}
+              pickLabel={g.prediction.favorite === "home" ? g.home.name : g.away.name} t={t} lang={lang} />
+          )}
           {m?.winner && g.status === "scheduled" ? (
             <LineCalculator gameId={g.game_id} homeAbbr={g.home.abbreviation} awayAbbr={g.away.abbreviation}
               spreadMean={m.spread?.projection} totalMean={m.total?.projection}
@@ -298,7 +296,6 @@ function compactUsd(v: number): string {
 }
 
 function teamLabel(label: string, home: string, away: string) {
-  // English "home -4.5 covers" / Spanish "el local -4.5 cubre": put the team in place of the side
   return label.replace(/^(home|el local)\b/, home).replace(/^(away|el visitante)\b/, away);
 }
 
@@ -311,7 +308,7 @@ async function Absences({ data, sides }: { data: Partial<Record<"home" | "away",
   return (
     <div className="grid gap-5 sm:grid-cols-2">
       {sides.map(([side, team]) => {
-        const t = data[side];   // this team's absences
+        const t = data[side];   
         return (
           <div key={side}>
             <div className="mb-2 flex items-center gap-2">

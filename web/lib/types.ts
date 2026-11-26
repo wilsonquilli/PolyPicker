@@ -1,5 +1,7 @@
 // Response types for the PolyPicker API (see backend/polypicker/api/schemas.py and routers).
 
+import type { Reason } from "./reasons";
+
 export interface Meta {
   generated_at: string;
   attribution: string;
@@ -30,7 +32,19 @@ export interface GameSide extends TeamRef {
   record: string | null;
 }
 
-export interface PredictionHeadline {
+/** When a forecast was last re-checked (latest run for its league) and its market prices last fetched. */
+export interface Freshness {
+  published_at: string;
+  checked_at?: string | null;
+  odds_at?: string | null;
+}
+
+/** Newest of the forecast check and the odds fetch: what "Updated X ago" shows. */
+export function lastUpdated(p: Freshness): string {
+  return [p.published_at, p.checked_at, p.odds_at].filter((x): x is string => !!x).reduce((a, b) => (Date.parse(b) > Date.parse(a) ? b : a));
+}
+
+export interface PredictionHeadline extends Freshness {
   kind: "live" | "backtest";
   revision: number;
   published_at: string;
@@ -77,6 +91,7 @@ export interface GameSummary {
   away: GameSide;
   winner_team_id: number | null;
   prediction: PredictionHeadline | null;
+  reasons?: Reason[] | null;
 }
 
 export interface FormResult {

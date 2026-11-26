@@ -4,6 +4,7 @@ Each player carries two per-minute impact ratings built only from earlier games:
 
 * ``gs``  -- Hollinger game score per minute (box-score production)
 * ``pm``  -- plus-minus per minute (on-court results)
+* ``apm`` -- adjusted plus-minus (polypicker/ml/apm.py): margin impact net of teammates and opponents
 
 Both are recency-weighted (older games decay), carried across seasons at reduced weight, and
 shrunk toward replacement level until the player has enough minutes. A team's strength for a
@@ -31,6 +32,7 @@ from typing import Callable
 import polars as pl
 from sqlalchemy import Engine
 
+from polypicker.ml.apm import UNRATED, apm_ratings
 from polypicker.ml.data import COMPETITIVE, _read
 
 DECAY = 0.965             # per game the player plays (half-life ~20 games)
@@ -46,7 +48,7 @@ ROSTER_LOOKBACK = 15      # a player belongs to a team's rotation if he played i
 TEAM_MINUTES = 240.0
 PM_MODE = "raw"            # "raw" plus-minus, or "relative" to the team's margin (teammate-adjusted)
 
-LINEUP_FEATURES = ["lineup_pm", "lineup_gs", "full_pm", "missing_pm", "missing_min"]
+LINEUP_FEATURES = ["lineup_pm", "lineup_gs", "full_pm", "missing_pm", "missing_min", "lineup_apm", "full_apm", "missing_apm"]
 
 AvailabilityFn = Callable[[int, int, int], float | None]  # (game_id, team_id, player_id) -> weight or None
 
@@ -77,6 +79,7 @@ class _P:
     pm: float = 0.0
     mins: float = 0.0
     status: dict = field(default_factory=dict)  # game_id -> participation
+    apm: float = UNRATED                        # today's adjusted plus-minus per 48 (set before each day)
 
     def gs_rate(self, repl: float) -> float:
         return (self.gs + GS_PRIOR_MIN * repl) / (self.mins + GS_PRIOR_MIN)
@@ -85,28 +88,34 @@ class _P:
         return (self.pm + PM_PRIOR_MIN * REPL_PM_PER_MIN) / (self.mins + PM_PRIOR_MIN)
 
 
-def _strength(players: list[tuple[_P, float]], repl_gs: float) -> tuple[float, float]:
-    """Minutes-weighted ratings (per 48 minutes) of the players expected to play."""
+def _strength(players: list[tuple[_P, float]], repl_gs: float) -> tuple[float, float, float]:
+    """Minutes-weighted ratings (per 48 minutes) of the players expected to play: (pm, gs, apm)."""
     mins = [(p, w * (p.min_ewm if p.min_ewm is not None else DEFAULT_MIN)) for p, w in players]
     total = sum(m for _, m in mins)
     if total < 1:
-        return 48 * REPL_PM_PER_MIN, 48 * repl_gs
+        return 48 * REPL_PM_PER_MIN, 48 * repl_gs, 48 * REPL_PM_PER_MIN
     scale = TEAM_MINUTES / total
-    pm = gs = 0.0
+    pm = gs = apm = 0.0
     for p, m in mins:
         m = min(m * scale, MAX_MIN)
         pm += m * p.pm_rate()
         gs += m * p.gs_rate(repl_gs)
+        apm += m * p.apm / 48
     used = sum(min(m * scale, MAX_MIN) for _, m in mins)
     # minutes lost to the cap are played by a replacement-level player
     pm += (TEAM_MINUTES - used) * REPL_PM_PER_MIN
     gs += (TEAM_MINUTES - used) * repl_gs
-    return 48 * pm / TEAM_MINUTES, 48 * gs / TEAM_MINUTES
+    apm += (TEAM_MINUTES - used) * REPL_PM_PER_MIN
+    return 48 * pm / TEAM_MINUTES, 48 * gs / TEAM_MINUTES, 48 * apm / TEAM_MINUTES
 
 
-def build_lineup_features(games: pl.DataFrame, box: pl.DataFrame, availability: AvailabilityFn | None = None
-                          ) -> pl.DataFrame:
-    """One row per (game_id, team_id): lineup strength, full-strength rating, what's missing, who's out."""
+def build_lineup_features(games: pl.DataFrame, box: pl.DataFrame, availability: AvailabilityFn | None = None,
+                          *, pregame_only: bool = False, apm: dict | None = None) -> pl.DataFrame:
+    """One row per (game_id, team_id): lineup strength, full-strength rating, what's missing, who's out.
+
+    ``pregame_only``: treat finished games like upcoming ones (``availability`` / box-score fallback instead
+    of who actually played) -- an honest replay of what was knowable before tip-off, for evaluation."""
+    apm = apm if apm is not None else apm_ratings(games, box)
     by_game: dict[int, list[dict]] = defaultdict(list)
     for r in box.iter_rows(named=True):
         by_game[r["game_id"]].append(r)
@@ -125,6 +134,7 @@ def build_lineup_features(games: pl.DataFrame, box: pl.DataFrame, availability: 
     for (day,), day_games in games.sort("tipoff_utc").group_by(["game_date_et"], maintain_order=True):
         rows = list(day_games.iter_rows(named=True))
         repl = REPL_GS_FACTOR * (lg_gs / lg_min if lg_min > 5000 else 0.45)
+        today = apm.get(day, {})
         for g in rows:
             gid, final = g["game_id"], g["status"] == "final"
             played = {b["player_id"]: b for b in by_game.get(gid, []) if b["participation"] == "played"}
@@ -133,7 +143,7 @@ def build_lineup_features(games: pl.DataFrame, box: pl.DataFrame, availability: 
                 last2 = team_games[team][-2:]
                 weights: dict[int, float] = {}
                 reasons: dict[int, str] = {}
-                if final and played:
+                if final and played and not pregame_only:
                     for pid in roster:
                         weights[pid] = 1.0 if pid in played else 0.0
                     for pid, b in played.items():
@@ -152,14 +162,17 @@ def build_lineup_features(games: pl.DataFrame, box: pl.DataFrame, availability: 
                         weights[pid] = w
                 avail = [(ps[pid], w) for pid, w in weights.items() if w > 0]
                 full = [(ps[pid], 1.0) for pid in roster]
-                l_pm, l_gs = _strength(avail, repl)
-                f_pm, f_gs = _strength(full, repl) if full else (l_pm, l_gs)
+                for pid in weights:
+                    ps[pid].apm = today.get(pid, UNRATED)  # point-in-time rating for this game day
+                l_pm, l_gs, l_apm = _strength(avail, repl)
+                f_pm, f_gs, f_apm = _strength(full, repl) if full else (l_pm, l_gs, l_apm)
                 exp = {pid: ps[pid].min_ewm or DEFAULT_MIN for pid in roster}
                 tot = sum(exp.values())
                 miss = sum(exp[pid] * (1 - weights.get(pid, 1.0)) for pid in roster) / tot if tot else 0.0
                 outs = sorted((pid for pid in roster if weights.get(pid, 1.0) < 1.0), key=lambda p: -exp[p])
                 out.append({"game_id": gid, "team_id": team, "lineup_pm": l_pm, "lineup_gs": l_gs,
                             "full_pm": f_pm, "missing_pm": f_pm - l_pm, "missing_min": miss,
+                            "lineup_apm": l_apm, "full_apm": f_apm, "missing_apm": f_apm - l_apm,
                             "out_players": [{"player_id": pid, "exp_minutes": round(exp[pid], 1),
                                              "pm48": round(48 * ps[pid].pm_rate(), 1),
                                              "weight": round(weights.get(pid, 1.0), 2),

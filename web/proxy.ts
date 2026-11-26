@@ -1,18 +1,10 @@
 import { NextResponse, type NextRequest } from "next/server";
 
-/**
- * Language without changing URLs: every page lives under app/[lang]; the visible URL stays /nba, /soccer/epl...
- *
- * - `pp-lang` cookie (set by the EN/ES switch in the header) picks the language; first visit falls back to the
- *   browser's Accept-Language (Spanish speakers get Spanish), then English.
- * - `/es/...` or `/en/...` links (shareable) set the cookie and redirect to the plain URL.
- */
 type Lang = "en" | "es";
 export const LANG_COOKIE = "pp-lang";
 const YEAR = 60 * 60 * 24 * 365;
 
 function fromHeader(header: string | null): Lang {
-  // "es-EC,es;q=0.9,en;q=0.8" -> first listed language that we support
   for (const part of (header ?? "").split(",")) {
     const code = part.trim().slice(0, 2).toLowerCase();
     if (code === "es" || code === "en") return code;
@@ -36,6 +28,5 @@ export function proxy(request: NextRequest) {
 }
 
 export const config = {
-  // Pages only: not Next internals, the API proxy, or files (icons, sw.js, manifest.webmanifest...).
   matcher: ["/((?!_next/|api/|.*\\.[a-zA-Z0-9]+$).*)"],
 };

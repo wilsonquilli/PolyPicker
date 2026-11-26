@@ -1,7 +1,6 @@
 import Link from "next/link";
 import { connection } from "next/server";
 import { Suspense } from "react";
-
 import { LeagueFlag } from "@/components/LeagueFlag";
 import { SoccerBadge } from "@/components/soccer/MatchCard";
 import { Card, Skeleton } from "@/components/ui";
@@ -16,7 +15,6 @@ export async function generateMetadata() {
   return { title: t("Soccer"), description: t("Match forecasts for the Premier League, LaLiga, Bundesliga, Serie A, Ligue 1, Champions League, Europa League, Copa Libertadores, Copa Sudamericana and LigaPro.") };
 }
 
-/** Soccer hub: every competition, grouped by region, with its next few matches. */
 export default async function SoccerHub() {
   const t = await getT();
   return (
@@ -35,7 +33,7 @@ export default async function SoccerHub() {
 
 async function Hub() {
   const t = await getT();
-  await connection(); // "today" is per-request
+  await connection(); 
   const today = todayET();
   const next = await Promise.all(LEAGUE_SLUGS.map(async (slug) => {
     try {

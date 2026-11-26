@@ -1,5 +1,4 @@
 import Link from "next/link";
-
 import { ThemeToggle } from "@/components/HeaderClient";
 import { InstallButton } from "@/components/pwa";
 import { SPORTS } from "@/lib/sports";
@@ -11,6 +10,7 @@ export async function generateMetadata() {
 }
 
 const LINKS = [
+  { href: "/bets", label: "My bets", sub: "Your tracked bets, record and profit" },
   { href: "/nba/teams", label: "NBA teams", sub: "All 30 teams, records and schedules" },
   { href: "/nba/value", label: "NBA value finder", sub: "Bets where our numbers beat the price" },
   { href: "/nba/accuracy", label: "NBA accuracy", sub: "How well the forecasts have done" },
@@ -21,7 +21,6 @@ const LINKS = [
   { href: "/install", label: "Install the app", sub: "Add PolyPicker to your home screen" },
 ];
 
-// Phone "More" tab: the destinations that don't fit in the bottom tab bar.
 export default async function MorePage() {
   const t = await getT();
   return (

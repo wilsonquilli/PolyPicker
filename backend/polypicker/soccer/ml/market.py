@@ -65,9 +65,11 @@ def implied_rates(p_home: np.ndarray, p_away: np.ndarray, line: np.ndarray, p_ov
 
 
 def odds_features(odds: pl.DataFrame) -> pl.DataFrame:
-    """game_id, mkt_xg_home, mkt_xg_away from soccer_odds rows."""
+    """game_id, mkt_xg_home, mkt_xg_away (+ the vig-free 1X2 itself: mkt_p_home / mkt_p_draw / mkt_p_away)."""
     if odds.is_empty():
-        return pl.DataFrame(schema={"game_id": pl.Int64, "mkt_xg_home": pl.Float64, "mkt_xg_away": pl.Float64})
+        return pl.DataFrame(schema={"game_id": pl.Int64, "mkt_xg_home": pl.Float64, "mkt_xg_away": pl.Float64,
+                                    "mkt_p_home": pl.Float64, "mkt_p_draw": pl.Float64, "mkt_p_away": pl.Float64})
     f = lambda c: odds[c].cast(pl.Float64).fill_null(np.nan).to_numpy()  # noqa: E731
     r = implied_rates(f("p_home"), f("p_away"), f("total_line"), f("p_over"))
-    return pl.DataFrame({"game_id": odds["game_id"], "mkt_xg_home": r[:, 0], "mkt_xg_away": r[:, 1]})
+    return pl.DataFrame({"game_id": odds["game_id"], "mkt_xg_home": r[:, 0], "mkt_xg_away": r[:, 1],
+                         "mkt_p_home": f("p_home"), "mkt_p_draw": f("p_draw"), "mkt_p_away": f("p_away")})

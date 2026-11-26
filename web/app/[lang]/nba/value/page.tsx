@@ -1,6 +1,5 @@
 import Link from "next/link";
 import { Suspense } from "react";
-
 import { Card, EmptyState, Pill, SectionTitle, Skeleton, StatTile, TeamBadge } from "@/components/ui";
 import { api } from "@/lib/api";
 import { dateTimeET, shortDate } from "@/lib/format";

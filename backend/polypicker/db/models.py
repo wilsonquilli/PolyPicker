@@ -9,9 +9,9 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
-from sqlalchemy import (BigInteger, Boolean, Date, DateTime, Float, ForeignKey, Index, Integer,
+from sqlalchemy import (BigInteger, Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, LargeBinary,
                         SmallInteger, String, Text, UniqueConstraint, func)
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -303,6 +303,36 @@ class PolymarketNba(ProvenanceMixin, Base):
     fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
+class NbaOfficialInjury(ProvenanceMixin, Base):
+    """One row per player per official NBA injury report (the league PDF). ``player_name`` = "(team)" with
+    status "Not Yet Submitted" marks a team that hadn't filed when the report was published."""
+    __tablename__ = "nba_official_injuries"
+    report_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
+    team_id: Mapped[int] = mapped_column(ForeignKey("teams.team_id"), primary_key=True)
+    player_name: Mapped[str] = mapped_column(String(128), primary_key=True)
+    game_date: Mapped[date] = mapped_column(Date, index=True)
+    matchup: Mapped[str] = mapped_column(String(16))
+    game_id: Mapped[int | None] = mapped_column(ForeignKey("games.game_id"), index=True)
+    player_id: Mapped[int | None] = mapped_column(ForeignKey("players.player_id"))
+    status: Mapped[str] = mapped_column(String(32))
+    reason: Mapped[str | None] = mapped_column(String(200))
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class KalshiNba(ProvenanceMixin, Base):
+    """Kalshi game-winner market per NBA game (the home team's "yes" price = home win probability)."""
+    __tablename__ = "kalshi_nba"
+    game_id: Mapped[int] = mapped_column(ForeignKey("games.game_id"), primary_key=True)
+    event_ticker: Mapped[str] = mapped_column(String(64))
+    ticker_home: Mapped[str] = mapped_column(String(80))
+    p_home_live: Mapped[float | None] = mapped_column(Float)
+    p_home_pregame: Mapped[float | None] = mapped_column(Float)
+    pregame_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    volume: Mapped[float | None] = mapped_column(Float)
+    closed: Mapped[bool] = mapped_column(Boolean, default=False)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class NbaOddsBook(ProvenanceMixin, Base):
     """Every sportsbook's game line (ESPN odds feed): opening and closing/current moneyline, spread, total.
     Feeds line shopping and closing-line value; ``nba_odds`` keeps the single preferred book."""
@@ -408,6 +438,8 @@ class Model(Base):
     params: Mapped[dict | None] = mapped_column(JSONB)
     metrics: Mapped[dict | None] = mapped_column(JSONB)
     artifact_path: Mapped[str | None] = mapped_column(Text)
+    # The pickled model itself, so any server (Render cron jobs have no persistent disk) can load it.
+    artifact_blob: Mapped[bytes | None] = mapped_column(LargeBinary, deferred=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=False)
     trained_at: Mapped[datetime] = _now()
     __table_args__ = (UniqueConstraint("target", "version"),)
@@ -524,3 +556,19 @@ class Combo(Base):
     created_at: Mapped[datetime] = _now()
     updated_at: Mapped[datetime] = _now()
     __table_args__ = (Index("ix_combos_slot", "sport", "kind", "n_legs", "created_at"),)
+
+
+class NbaLineupPossessions(Base):
+    """Possessions between two five-man units in one game (garbage time excluded), from SportsDataverse's
+    stats.nba.com-derived possession files: the input to possession-level RAPM. ``season`` = our season
+    (2025 = 2025-26). Player and team ids are NBA.com ids; no FK so seasons before ``games`` can be loaded."""
+    __tablename__ = "nba_lineup_possessions"
+    season: Mapped[int] = mapped_column(SmallInteger, index=True)
+    game_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    off_team_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    off_ids: Mapped[list[int]] = mapped_column(ARRAY(BigInteger), primary_key=True)   # sorted
+    def_ids: Mapped[list[int]] = mapped_column(ARRAY(BigInteger), primary_key=True)
+    def_team_id: Mapped[int] = mapped_column(BigInteger)
+    possessions: Mapped[int] = mapped_column(SmallInteger)
+    points: Mapped[int] = mapped_column(SmallInteger)
+

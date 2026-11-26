@@ -5,7 +5,8 @@ import { intlLocale, makeT, type Lang, type T } from "./i18n";
 import type { NflGame } from "./nfl";
 import type { LeagueSlug, SoccerGame } from "./soccer";
 import { SOCCER_LEAGUES, teamCss } from "./soccer";
-import type { GameStatus, GameSummary } from "./types";
+import type { Reason } from "./reasons";
+import { lastUpdated, type Freshness, type GameStatus, type GameSummary } from "./types";
 
 export type LeagueKey = "nba" | "nfl" | LeagueSlug;
 
@@ -53,6 +54,12 @@ export interface Market {
   projection: string | null;
   result: PickKey | null; // finals only
   polymarket?: { p_home: number; url: string; volume_usd: number | null } | null; // NBA only, for comparison
+  fresh: { at: string; checked: string | null; odds: string | null } | null; // "Updated X ago"; live forecasts only
+  reasons: Reason[] | null; // plain-language "why", upcoming games only
+}
+
+function freshOf(p: Freshness & { kind: string } | null): Market["fresh"] {
+  return p && p.kind === "live" ? { at: lastUpdated(p), checked: p.checked_at ?? null, odds: p.odds_at ?? null } : null;
 }
 
 function twoWay(g: GameSummary, league: "nba" | "nfl", context: string | null, t: T): Market {
@@ -70,6 +77,7 @@ function twoWay(g: GameSummary, league: "nba" | "nfl", context: string | null, t
     home: side(g.home, p ? p.p_home_win : null), away: side(g.away, p ? p.p_away_win : null), pDraw: null,
     pick: p ? p.favorite : null, pickP: p ? Math.max(p.p_home_win, p.p_away_win) : null, projection: proj,
     result: !final ? null : tie ? "draw" : g.winner_team_id === g.home.team_id ? "home" : "away",
+    fresh: freshOf(p), reasons: g.reasons ?? null,
   };
 }
 
@@ -97,6 +105,7 @@ export function fromSoccer(g: SoccerGame, t: T = makeT()): Market {
     projection: p && p.xg_home !== undefined && p.xg_away !== undefined
       ? `${t("Exp. goals")} ${g.home.abbreviation} ${p.xg_home.toFixed(1)}–${p.xg_away.toFixed(1)} ${g.away.abbreviation}` : null,
     result: g.result === "H" ? "home" : g.result === "A" ? "away" : g.result === "D" ? "draw" : null,
+    fresh: freshOf(p), reasons: g.reasons ?? null,
   };
 }
 

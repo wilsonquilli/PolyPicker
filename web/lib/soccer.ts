@@ -2,7 +2,8 @@
 // /soccer/<league>; the slugs match backend/polypicker/soccer/leagues.py.
 import { intlLocale, makeT, type Lang, type T } from "./i18n";
 
-import type { Outcome } from "./types";
+import type { Reason } from "./reasons";
+import type { Freshness, Outcome } from "./types";
 
 type LeagueDef = { slug: string; name: string; short: string; country: string; flag: string; kind: "league" | "cup"; region: Region };
 export type Region = "Top leagues" | "European cups" | "South America";
@@ -51,7 +52,7 @@ export interface SoccerSide extends SoccerTeam {
   record: string | null; // W-D-L entering the match
 }
 
-export interface SoccerHeadline {
+export interface SoccerHeadline extends Freshness {
   kind: "live" | "backtest";
   revision: number;
   published_at: string;
@@ -84,6 +85,7 @@ export interface SoccerGame {
   away: SoccerSide;
   result: "H" | "D" | "A" | null;
   prediction: SoccerHeadline | null;
+  reasons?: Reason[] | null;
 }
 
 export interface FormRow { game_id: number; date: string; opponent: string; home: boolean; result: "W" | "D" | "L"; goals_for: number; goals_against: number }
@@ -160,6 +162,21 @@ export interface TableRow extends SoccerTeam {
 }
 
 /** Team color as CSS; ESPN colors are hex without '#'. Very light primaries fall back to the alternate color. */
+/** A "strong pick": the most likely result is rated at least this likely. Below it the match is close to a coin flip
+ *  and we show "no strong pick" (same cut-off as the backend's STRONG_PICK, used for the strong-pick accuracy). */
+export const STRONG_PICK = 0.45;
+
+export function isStrongPick(p: { p_home: number; p_draw: number; p_away: number }): boolean {
+  return Math.max(p.p_home, p.p_draw, p.p_away) >= STRONG_PICK;
+}
+
+/** Double chance (favourite or draw) and draw no bet (favourite, a draw voids it), from the 1X2 probabilities. */
+export function saferPicks(p: { p_home: number; p_draw: number; p_away: number }) {
+  const fav = p.p_home >= p.p_away ? "home" as const : "away" as const;
+  const pf = fav === "home" ? p.p_home : p.p_away;
+  return { fav, doubleChance: pf + p.p_draw, drawNoBet: pf / (p.p_home + p.p_away) };
+}
+
 export function teamCss(t: { color: string | null; alt_color?: string | null }): string {
   const pick = (h: string | null | undefined) => (h && /^[0-9a-f]{6}$/i.test(h) ? h : null);
   const c = pick(t.color), alt = pick(t.alt_color);

@@ -111,7 +111,8 @@ def forecast(engine: Engine, fs: FeatureSet, model_id: int, game_ids: list[int],
                                    .order_by(P.game_id, P.revision.desc()).distinct(P.game_id)).all())
     rows, written, skipped = [], 0, 0
     for p in preds:
-        h = hashlib.sha1(json.dumps([round(p["xg_home"], 3), round(p["xg_away"], 3), model_id]).encode()).hexdigest()
+        h = hashlib.sha1(json.dumps([round(p["xg_home"], 3), round(p["xg_away"], 3), round(p["home"], 4), round(p["draw"], 4),
+                                     model_id]).encode()).hexdigest()
         if skip_unchanged and last_hash.get(p["game_id"]) == h:
             skipped += 1
             continue

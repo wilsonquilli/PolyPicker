@@ -78,6 +78,8 @@ class NflGame(ProvenanceMixin, Base):
     # Closing betting-market lines (nflverse): accuracy benchmark, and the market model's input when posted.
     market_spread_home: Mapped[float | None] = mapped_column(Float)          # + = home favored by N
     market_total: Mapped[float | None] = mapped_column(Float)
+    market_home_ml: Mapped[int | None] = mapped_column(Integer)              # closing moneylines (nflverse)
+    market_away_ml: Mapped[int | None] = mapped_column(Integer)
     has_player_stats: Mapped[bool] = mapped_column(Boolean, default=False)
     __table_args__ = (
         Index("ix_nfl_games_date", "game_date_et"),
@@ -217,3 +219,77 @@ class NflPredictionOutcome(Base):
     log_loss: Mapped[float | None] = mapped_column(Float)
     abs_error: Mapped[float | None] = mapped_column(Float)
     graded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class NflMarketPrice(ProvenanceMixin, Base):
+    """Win price per NFL game per outside market: prediction markets (Kalshi, Polymarket: the home team's
+    price) and sportsbooks from The Odds API (Pinnacle, ...: moneylines). ``p_home_pregame`` = last price
+    at or before kickoff; ``p_home_live`` = current price while the game is upcoming (vig-free for books)."""
+    __tablename__ = "nfl_market_prices"
+    game_id: Mapped[int] = mapped_column(ForeignKey("nfl_games.game_id"), primary_key=True)
+    source: Mapped[str] = mapped_column(String(32), primary_key=True)     # kalshi | polymarket | Pinnacle | ...
+    ref: Mapped[str | None] = mapped_column(String(160))                  # market ticker / id
+    p_home_live: Mapped[float | None] = mapped_column(Float)
+    p_home_pregame: Mapped[float | None] = mapped_column(Float)
+    pregame_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    home_ml: Mapped[int | None] = mapped_column(Integer)
+    away_ml: Mapped[int | None] = mapped_column(Integer)
+    home_ml_open: Mapped[int | None] = mapped_column(Integer)
+    away_ml_open: Mapped[int | None] = mapped_column(Integer)
+    volume: Mapped[float | None] = mapped_column(Float)
+    closed: Mapped[bool] = mapped_column(Boolean, default=False)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class NflDepthChart(ProvenanceMixin, Base):
+    """Offensive depth chart per team-week (skill positions): rank 1 = starter. Weekly charts to 2024; from 2025
+    nflverse publishes daily snapshots and the last one before each game is kept."""
+    __tablename__ = "nfl_depth_charts"
+    season: Mapped[int] = mapped_column(SmallInteger, primary_key=True)
+    week: Mapped[int] = mapped_column(SmallInteger, primary_key=True)
+    team_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    player_id: Mapped[str] = mapped_column(String(16), primary_key=True)
+    position: Mapped[str] = mapped_column(String(4), primary_key=True)
+    depth_rank: Mapped[int] = mapped_column(SmallInteger)
+    snapshot_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class NflNgsWeekly(ProvenanceMixin, Base):
+    """NFL Next Gen Stats per player-week (week 0 = season to date): passing / receiving / rushing metrics such as
+    time to throw, CPOE, separation, YAC over expected, rush yards over expected."""
+    __tablename__ = "nfl_ngs_weekly"
+    season: Mapped[int] = mapped_column(SmallInteger, primary_key=True)
+    season_type: Mapped[str] = mapped_column(String(4), primary_key=True)
+    week: Mapped[int] = mapped_column(SmallInteger, primary_key=True)
+    stat_type: Mapped[str] = mapped_column(String(10), primary_key=True)
+    player_id: Mapped[str] = mapped_column(String(16), primary_key=True)
+    team_id: Mapped[int | None] = mapped_column(Integer)
+    metrics: Mapped[dict] = mapped_column(JSONB)
+
+
+class NflFtnTeamGame(ProvenanceMixin, Base):
+    """FTN charting rolled up per team-game (2022 on): offensive tendencies and what the defence did."""
+    __tablename__ = "nfl_ftn_team_games"
+    game_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    team_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    plays: Mapped[int] = mapped_column(SmallInteger)
+    play_action_rate: Mapped[float | None] = mapped_column(Float)
+    motion_rate: Mapped[float | None] = mapped_column(Float)
+    no_huddle_rate: Mapped[float | None] = mapped_column(Float)
+    screen_rate: Mapped[float | None] = mapped_column(Float)
+    rpo_rate: Mapped[float | None] = mapped_column(Float)
+    out_of_pocket_rate: Mapped[float | None] = mapped_column(Float)
+    drop_rate: Mapped[float | None] = mapped_column(Float)            # drops / catchable balls
+    avg_box: Mapped[float | None] = mapped_column(Float)              # defenders in the box faced
+    def_plays: Mapped[int | None] = mapped_column(SmallInteger)
+    def_blitz_rate: Mapped[float | None] = mapped_column(Float)       # dropbacks where this defence blitzed
+    def_avg_rushers: Mapped[float | None] = mapped_column(Float)
+
+
+class NflGameOfficial(ProvenanceMixin, Base):
+    __tablename__ = "nfl_game_officials"
+    game_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    official_id: Mapped[str] = mapped_column(String(16), primary_key=True)
+    name: Mapped[str] = mapped_column(String(80))
+    position: Mapped[str] = mapped_column(String(24))
+

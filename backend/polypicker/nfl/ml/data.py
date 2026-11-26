@@ -13,13 +13,20 @@ STAT_COLS = ["pass_attempts", "completions", "passing_yards", "passing_tds", "in
 
 
 def load_games(engine: Engine) -> pl.DataFrame:
-    return _read(engine, """
+    # outside win prices: last pregame price for played games, the current one for upcoming games
+    price = """(SELECT CASE WHEN g.status = 'final' THEN coalesce(x.p_home_pregame, x.p_home_live)
+                            ELSE coalesce(x.p_home_live, x.p_home_pregame) END
+                FROM nfl_market_prices x WHERE x.game_id = g.game_id AND x.source = '{src}')"""
+    return _read(engine, f"""
         SELECT game_id, season, season_type, game_type, week, kickoff_utc, game_date_et, home_team_id, away_team_id,
                status, home_score, away_score, neutral_site, div_game, roof, home_rest, away_rest,
-               market_spread_home, market_total
-        FROM nfl_games WHERE status <> 'canceled'
+               market_spread_home, market_total, market_home_ml, market_away_ml,
+               {price.format(src="kalshi")} AS kalshi_p_home, {price.format(src="Pinnacle")} AS pinnacle_p_home
+        FROM nfl_games g WHERE status <> 'canceled'
         ORDER BY kickoff_utc, game_id""",
-                 schema_overrides={"market_spread_home": pl.Float64, "market_total": pl.Float64}).with_columns(
+                 schema_overrides={c: pl.Float64 for c in ("market_spread_home", "market_total", "kalshi_p_home",
+                                                             "pinnacle_p_home")}
+                 | {"market_home_ml": pl.Int64, "market_away_ml": pl.Int64}).with_columns(
         pl.col("kickoff_utc").dt.convert_time_zone("UTC"))
 
 

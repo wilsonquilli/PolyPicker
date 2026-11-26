@@ -149,6 +149,7 @@ class NflverseSource:
             _i("home_rest").alias("home_rest"), _i("away_rest").alias("away_rest"),
             pl.col("spread_line").cast(pl.Float64).alias("market_spread_home"),
             pl.col("total_line").cast(pl.Float64).alias("market_total"),
+            _i("home_moneyline").alias("market_home_ml"), _i("away_moneyline").alias("market_away_ml"),
         )
         dup = g.filter(pl.col("game_id").is_duplicated())
         for gid in dup["game_id"].unique().to_list():
@@ -158,7 +159,7 @@ class NflverseSource:
                         pl.col("week").cast(pl.Int64), "kickoff_utc", "game_date_et", "home_team_id", "away_team_id",
                         "status", "home_score", "away_score", "winner_team_id", "overtime", "neutral_site",
                         "div_game", "roof", "surface", "stadium", "home_rest", "away_rest", "market_spread_home",
-                        "market_total")
+                        "market_total", "market_home_ml", "market_away_ml")
 
     # ------------------------------------------------------------------ team game stats
     def _team_stats(self, ts: pl.DataFrame, gid: pl.DataFrame, abbr_to_id: dict[str, int],

@@ -9,6 +9,7 @@ import { useSyncExternalStore } from "react";
 export { legKey, type Sport } from "./home";
 
 const STORE = "pp-slip";
+const SETTLED = "pp-slip-settled";   // the slip last shown with every game finished
 export const MAX_LEGS = 12;
 const listeners = new Set<() => void>();
 let cache: string | null = null;
@@ -82,5 +83,27 @@ export const slip = {
   },
   clear() {
     write([]);
+    try {
+      localStorage.removeItem(SETTLED);
+    } catch {}
+  },
+  /** Remember that this exact slip was shown with every game over: the next visit starts with an empty slip. */
+  markSettled(keys: string[]) {
+    try {
+      localStorage.setItem(SETTLED, keys.join(","));
+    } catch {}
+  },
+  /** On page load: clear the slip if it's the one already shown as finished. True if it was cleared. */
+  clearIfSettled(): boolean {
+    try {
+      const done = localStorage.getItem(SETTLED);
+      if (done === null) return false;
+      localStorage.removeItem(SETTLED);
+      if (done && done === read()) {
+        write([]);
+        return true;
+      }
+    } catch {}
+    return false;
   },
 };

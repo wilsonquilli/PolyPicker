@@ -1,7 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
-
 import { RelativeTime } from "@/components/client";
 import { DistributionChart } from "@/components/game/DistributionChart";
 import { NflLineExplorer } from "@/components/nfl/LineExplorer";
@@ -13,6 +12,7 @@ import type { NflGameDetail, NflPredictions, NflTeamStats } from "@/lib/nfl";
 import type { Factor, GameLineMarket, GameSide, Outcome } from "@/lib/types";
 import { keyed } from "@/lib/i18n";
 import { rich } from "@/lib/i18n/rich";
+import { ReasonList } from "@/components/Reasons";
 import { getLang, getT } from "@/lib/i18n/server";
 
 type Params = Promise<{ id: string }>;
@@ -154,6 +154,10 @@ async function GameContent({ params }: { params: Params }) {
         </div>
 
         <aside className="flex flex-col gap-4 lg:sticky lg:top-32 lg:self-start">
+          {g.status === "scheduled" && g.prediction && (
+            <ReasonList reasons={g.reasons} pick={g.prediction.favorite} teams={{ home: g.home.name, away: g.away.name }}
+              pickLabel={g.prediction.favorite === "home" ? g.home.name : g.away.name} t={t} lang={lang} />
+          )}
           {m?.winner && g.status === "scheduled" ? (
             <NflLineExplorer gameId={g.game_id} homeAbbr={g.home.abbreviation} awayAbbr={g.away.abbreviation}
               spreadMean={m.spread?.projection} totalMean={m.total?.projection}

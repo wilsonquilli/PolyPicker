@@ -11,6 +11,12 @@ NFL specifics
   2+ weeks out) use the stats model. Tested on 2023-2026 hold-outs: stats model 62.8/69.5/66.9/64.8%
   winners, market model 67.4/70.5/65.8/69.1% with better log loss; stacking gave the stats model a
   slightly negative weight next to the market, so adding every stats input on top over-fits.
+* v3 (2026-11-24): the win probability for games with any market price is the market's own consensus --
+  mean of the vig-free closing moneyline, the spread as a probability, Kalshi and Pinnacle (whichever
+  exist) -- passed through a logistic calibration fit on earlier seasons. Our ridge-on-the-spread route
+  lost information: hold-outs 2025 65.8% / log loss 0.6137 -> 66.2% / 0.6068, 2026 68.5% / 0.6072 ->
+  69.1% / 0.6044. Polymarket is left out (its 2024 NFL prices were thin and noisy). Projected scores,
+  spreads and totals still come from the ridge models.
 """
 
 from __future__ import annotations
@@ -54,8 +60,25 @@ MIN_LINE_VALIDATION_GAMES = 250   # one NFL season is ~285 games
 MARKET_SIGMA = 13.5               # typical NFL margin sd, used to turn the market spread into a win probability
 
 
+def _no_vig(home_ml: pl.Expr, away_ml: pl.Expr) -> pl.Expr:
+    imp = lambda ml: pl.when(ml < 0).then(-ml / (-ml + 100.0)).otherwise(100.0 / (ml + 100.0))  # noqa: E731
+    return imp(home_ml.cast(pl.Float64)) / (imp(home_ml.cast(pl.Float64)) + imp(away_ml.cast(pl.Float64)))
+
+
+def market_consensus(games: pl.DataFrame) -> pl.DataFrame:
+    """game_id -> mkt_p_home: mean of whichever market prices exist (see v3 in the module docstring)."""
+    cols = [c for c in ("kalshi_p_home", "pinnacle_p_home") if c in games.columns]
+    spread_p = pl.Series(stats.norm.sf(0, games["market_spread_home"].to_numpy().astype(float), MARKET_SIGMA)).fill_nan(None)
+    g = games.with_columns(spread_p.alias("_sp"))
+    parts = [pl.col("_sp"), *[pl.col(c) for c in cols]]
+    if "market_home_ml" in games.columns:
+        parts.append(_no_vig(pl.col("market_home_ml"), pl.col("market_away_ml")))
+    return g.select("game_id", pl.mean_horizontal(parts).alias("mkt_p_home"))
+
+
 def design(matchups: pl.DataFrame, games: pl.DataFrame) -> pl.DataFrame:
     g = games.select("game_id", "home_score", "away_score", "market_spread_home", "market_total", "kickoff_utc")
+    g = g.join(market_consensus(games), on="game_id", how="left")
     return matchups.join(g, on="game_id", how="left").with_columns(
         pl.when(pl.col("is_home")).then("home_score").otherwise("away_score").alias("y_points"),
         # market expected margin from this team's side (+ = favored) and half the market total
@@ -196,13 +219,36 @@ def _game_ids_with_market(df: pl.DataFrame) -> pl.Series:
     return df.filter(ok).group_by("game_id").len().filter(pl.col("len") == 2)["game_id"]
 
 
+def _logit(p: np.ndarray) -> np.ndarray:
+    p = np.clip(p, 0.02, 0.98)
+    return np.log(p / (1 - p))
+
+
+def fit_calibration(home_rows: pl.DataFrame) -> tuple[float, float] | None:
+    """Logistic fit of the result on logit(market consensus): -> (intercept, slope)."""
+    from sklearn.linear_model import LogisticRegression
+    d = home_rows.filter(pl.col("mkt_p_home").is_not_null() & (pl.col("home_score") != pl.col("away_score")))
+    if d.height < 200:
+        return None
+    lr = LogisticRegression(C=1e6).fit(_logit(d["mkt_p_home"].to_numpy()).reshape(-1, 1),
+                                       (d["home_score"] > d["away_score"]).to_numpy().astype(int))
+    return float(lr.intercept_[0]), float(lr.coef_[0][0])
+
+
+def calibrated(p: float, calib: tuple[float, float]) -> float:
+    a, b = calib
+    return float(1 / (1 + np.exp(-(a + b * _logit(np.array([p]))[0]))))
+
+
 @dataclass
 class MarketAwareNflGameModel:
-    """v2: the market model for games with a betting line, the stats model otherwise."""
+    """v2: the market model for games with a betting line, the stats model otherwise.
+    v3: win probability = calibrated market consensus wherever a market price exists."""
     base: NflGameModel
     market: NflGameModel | None
     metrics: dict = field(default_factory=dict)
     version: str = ""
+    calib: tuple[float, float] | None = None
 
     # pipeline-facing defaults (per-game values come back from predict_games)
     @property
@@ -222,12 +268,29 @@ class MarketAwareNflGameModel:
         mdata = data.filter(pl.col("game_id").is_in(_game_ids_with_market(data).implode()))
         market = NflGameModel.train(mdata, train_end, valid_start, valid_end, MARKET_MODEL)
         mm = market.metrics
+        homes = data.filter(pl.col("is_home") & pl.col("y_points").is_not_null()) if "mkt_p_home" in data.columns else None
+        calib_report, calib = None, None
+        if homes is not None:
+            first = homes["season"].min()
+            homes = homes.filter(pl.col("season") > first)
+            c_tr = fit_calibration(homes.filter(pl.col("game_date_et") <= train_end))
+            va = homes.filter((pl.col("game_date_et") >= valid_start) & (pl.col("game_date_et") <= valid_end)
+                              & pl.col("mkt_p_home").is_not_null() & (pl.col("home_score") != pl.col("away_score")))
+            if c_tr and va.height:
+                p = np.array([calibrated(x, c_tr) for x in va["mkt_p_home"].to_list()])
+                y = (va["home_score"] > va["away_score"]).to_numpy().astype(float)
+                calib_report = {"validation_games": va.height, "moneyline": metrics.binary_report(p, y),
+                                "raw_consensus": metrics.binary_report(va["mkt_p_home"].to_numpy(), y)}
+            calib = fit_calibration(homes.filter(pl.col("game_date_et") <= valid_end))
         report = {**mm,
                   "games_with_market": mm["validation_games"],
                   "base_model": {k: base.metrics[k] for k in ("validation_games", "moneyline", "margin_mae", "total_mae",
                                                               "spread_line_ece", "total_line_ece")},
-                  "market_model": {"features": MARKET_MODEL, "moneyline": mm["moneyline"], "margin_mae": mm["margin_mae"]}}
-        return cls(base, market, report)
+                  "market_model": {"features": MARKET_MODEL, "moneyline": mm["moneyline"], "margin_mae": mm["margin_mae"]},
+                  "market_consensus": calib_report}
+        if calib_report:  # the headline moneyline numbers are the ones published: the calibrated consensus
+            report["moneyline"] = calib_report["moneyline"]
+        return cls(base, market, report, calib=calib)
 
     def predict_games(self, rows: pl.DataFrame) -> list[dict]:
         if self.market is None or not all(c in rows.columns for c in MARKET):
@@ -236,4 +299,12 @@ class MarketAwareNflGameModel:
         with_m, without = rows.filter(pl.col("game_id").is_in(ok)), rows.filter(~pl.col("game_id").is_in(ok))
         out = [{**g, "uses_market": True} for g in self.market.predict_games(with_m)] if with_m.height else []
         out += [{**g, "uses_market": False} for g in self.base.predict_games(without)] if without.height else []
+        calib = getattr(self, "calib", None)  # models pickled before v3 have none
+        if calib and "mkt_p_home" in rows.columns:
+            cons = dict(rows.filter(pl.col("is_home") & pl.col("mkt_p_home").is_not_null())
+                        .select("game_id", "mkt_p_home").iter_rows())
+            for g in out:
+                if g["game_id"] in cons:
+                    g.update(p_home_win=calibrated(cons[g["game_id"]], calib), market_p_home=cons[g["game_id"]],
+                             uses_market=True)
         return out

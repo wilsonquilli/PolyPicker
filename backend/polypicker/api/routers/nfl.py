@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import Connection
 
 from polypicker.api.deps import cached, get_conn, q, q1, today_et
+from polypicker.api.freshness import stamp
 from polypicker.api.queries import meta
 from polypicker.config import DISCLAIMER
 from polypicker.domain.markets import Market, ThresholdKind, round_probability_pair
@@ -122,6 +123,7 @@ def headlines(conn: Connection, game_ids: list[int]) -> dict[int, dict]:
         h["favorite_label"] = "toss-up" if edge < 0.05 else "slight favorite" if edge < 0.15 else "favorite"
         h.setdefault("projected_home_points", None)
         h.setdefault("projected_away_points", None)
+    stamp(out, "nfl", conn)
     return out
 
 
@@ -129,6 +131,8 @@ def game_summaries(conn: Connection, rows: list[dict]) -> list[dict]:
     teams = teams_by_id(conn)
     heads = headlines(conn, [r["game_id"] for r in rows])
     recs = records_before(conn, rows)
+    from polypicker.api import reasons
+    why = reasons.nfl(conn, rows, heads)
     out = []
     for r in rows:
         def side(tid, score):
@@ -140,7 +144,7 @@ def game_summaries(conn: Connection, rows: list[dict]) -> list[dict]:
             "tipoff_utc": r["kickoff_utc"], "game_date": r["game_date_et"], "status": r["status"],
             "home": side(r["home_team_id"], r["home_score"]), "away": side(r["away_team_id"], r["away_score"]),
             "winner_team_id": r["winner_team_id"], "overtime": r["overtime"],
-            "prediction": heads.get(r["game_id"]),
+            "prediction": heads.get(r["game_id"]), "reasons": why.get(r["game_id"]),
         })
     return out
 
@@ -586,6 +590,14 @@ def search(q_: str = Query(..., alias="q", min_length=2), limit: int = Query(8, 
 
 
 # ---------------------------------------------------------------- accuracy
+
+@router.get("/line-movement")
+@cached(ttl=300)
+def line_movement_nfl(kind: str = Query("live", pattern="^(live|backtest)$"), conn: Connection = Depends(get_conn)):
+    """Opening -> closing line moves vs our picks (see api/linemove.py)."""
+    from polypicker.api.linemove import line_movement
+    return {"data": line_movement(conn, "nfl", kind), "meta": _meta()}
+
 
 @router.get("/models/performance")
 @cached(ttl=300)

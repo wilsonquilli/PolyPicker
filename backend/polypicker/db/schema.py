@@ -5,6 +5,8 @@ from sqlalchemy import Engine, text
 from polypicker.db.models import Base
 import polypicker.nfl.models  # noqa: F401  (registers the NFL tables on Base.metadata)
 import polypicker.soccer.models  # noqa: F401  (soccer tables)
+import polypicker.weather  # noqa: F401  (weather tables)
+import polypicker.alerts  # noqa: F401  (job_alerts)
 
 _IMMUTABLE_FN = """
 CREATE OR REPLACE FUNCTION polypicker_reject_change() RETURNS trigger AS $$
@@ -44,6 +46,12 @@ INSERT INTO data_sources (code, name, url, license_note, approved_for) VALUES
   'Unofficial, undocumented public endpoints; no usage rights granted. Lines are third-party sportsbook data. Research/prototyping only.', 'research'),
  ('polymarket', 'Polymarket Gamma API (markets) and CLOB price history', 'https://docs.polymarket.com',
   'Public read-only APIs, no key required; prices are crowd-traded probabilities. Attribute Polymarket when displayed.', 'research'),
+ ('nba_injury_report', 'Official NBA injury report (league PDF)', 'https://official.nba.com/nba-injury-report-2025-26-season/',
+  'Published by the NBA for public use; check the NBA.com Terms of Use before commercial redistribution.', 'research'),
+ ('odds_api', 'The Odds API (Pinnacle and US sportsbook lines)', 'https://the-odds-api.com',
+  'Paid/free-tier API with key; lines are third-party sportsbook data. Check plan terms before displaying.', 'research'),
+ ('kalshi', 'Kalshi trade API (NBA game markets and candlestick history)', 'https://docs.kalshi.com',
+  'Public read-only market data, no key required; prices are exchange-traded probabilities. Attribute Kalshi when displayed.', 'research'),
  ('espn_soccer', 'ESPN soccer scoreboard and match summaries (site.api.espn.com)',
   'https://site.api.espn.com/apis/site/v2/sports/soccer',
   'Unofficial, undocumented public endpoints; no usage rights granted. Research/prototyping only.', 'research'),
@@ -52,8 +60,24 @@ INSERT INTO data_sources (code, name, url, license_note, approved_for) VALUES
   'Unofficial, undocumented public endpoints; no usage rights granted. Lines are third-party sportsbook data. Research/prototyping only.', 'research'),
  ('openfootball', 'openfootball football.json (public domain)', 'https://github.com/openfootball/football.json',
   'CC0 1.0 (public domain): no restrictions.', 'commercial'),
+ ('fotmob', 'FotMob match data (www.fotmob.com/api/data, Opta-derived xG)', 'https://www.fotmob.com',
+  'Unofficial, undocumented endpoints; no usage rights granted. Research use only.', 'research'),
+ ('fdcuk', 'football-data.co.uk results, match stats and odds (CSV)', 'https://www.football-data.co.uk',
+  'Site terms restrict commercial use; owner accepted for this project. Research use.', 'research'),
+ ('fpl', 'Fantasy Premier League API + vaastav/Fantasy-Premier-League archive', 'https://fantasy.premierleague.com/api',
+  'Unofficial public FPL endpoints; archive is a community GitHub dataset. Research use.', 'research'),
+ ('nflverse_extras', 'nflverse depth charts, Next Gen Stats, FTN charting, officials (via nflreadpy)', 'https://nflreadr.nflverse.com',
+  'NGS data is NFL-owned; FTN charting is CC BY-SA 4.0 (attribute FTN Data). Research use.', 'research'),
+ ('open_meteo', 'Open-Meteo forecast + historical weather (ERA5) and geocoding', 'https://open-meteo.com',
+  'Free for non-commercial use, CC BY 4.0 data (attribute Open-Meteo).', 'research'),
+ ('sportsdataverse', 'SportsDataverse NBA possessions (stats.nba.com-derived, GitHub releases)',
+  'https://github.com/sportsdataverse/sportsdataverse-data', 'Community dataset derived from stats.nba.com; NBA.com terms apply. Research use.', 'research'),
+ ('clubelo', 'Club Elo ratings (api.clubelo.com)', 'http://clubelo.com',
+  'Free public API; attribute clubelo.com. Research use.', 'research'),
  ('football_data_org', 'football-data.org API v4', 'https://www.football-data.org',
-  'Free tier with API key; attribution required ("Football data provided by the Football-Data.org API").', 'research')
+  'Free tier with API key; attribution required ("Football data provided by the Football-Data.org API").', 'research'),
+ ('espn_nfl_odds', 'ESPN NFL betting lines, opening + closing (sports.core.api.espn.com odds)',
+  'https://sports.core.api.espn.com/v2/sports/football/leagues/nfl', 'Unofficial public endpoint. Research use.', 'research')
 ON CONFLICT (code) DO NOTHING;
 """
 
@@ -71,6 +95,9 @@ ALTER TABLE soccer_games ADD COLUMN IF NOT EXISTS away_score_90 smallint;
 ALTER TABLE soccer_games ADD COLUMN IF NOT EXISTS home_shootout smallint;
 ALTER TABLE soccer_games ADD COLUMN IF NOT EXISTS away_shootout smallint;
 ALTER TABLE soccer_games ADD COLUMN IF NOT EXISTS note varchar(200);
+ALTER TABLE models ADD COLUMN IF NOT EXISTS artifact_blob bytea;
+ALTER TABLE nfl_games ADD COLUMN IF NOT EXISTS market_home_ml integer;
+ALTER TABLE nfl_games ADD COLUMN IF NOT EXISTS market_away_ml integer;
 """
 
 

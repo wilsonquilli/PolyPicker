@@ -1,14 +1,9 @@
 import type { NextConfig } from "next";
 
-// Where the PolyPicker FastAPI backend lives, as seen from the Next.js server.
 const API_URL = (process.env.API_URL ?? "http://localhost:8000/api/v1").replace(/\/$/, "");
 
 const nextConfig: NextConfig = {
-  /* config options here */
   cacheComponents: true,
-  // Dev server only: let phones/tablets on the home network (and a quick HTTPS tunnel) load the dev build.
-  // Without this, Next blocks its dev scripts for any host but localhost, so pages render but nothing is
-  // interactive on the phone. Has no effect on production builds.
   allowedDevOrigins: ["192.168.*.*", "10.*.*.*", "172.*.*.*", "*.local", "*.trycloudflare.com"],
   partialPrefetching: true,
   turbopack: {
@@ -19,13 +14,11 @@ const nextConfig: NextConfig = {
       },
     },
   },
-  // Browser code calls the API through this same origin (/api/v1/...). That works on phones
-  // (where "localhost" would be the phone), in the installed app, and needs no CORS.
+  
   async rewrites() {
     return [{ source: "/api/v1/:path*", destination: `${API_URL}/:path*` }];
   },
-  // Sports live under their own prefix (/nba, /nfl, /soccer); "/" is the multi-sport home page. Links from
-  // before the move (bookmarks, installed apps, shared URLs) keep working.
+ 
   async redirects() {
     return [
       ...["games", "teams", "players"].map((p) => ({ source: `/${p}/:path*`, destination: `/nba/${p}/:path*`, permanent: true })),
@@ -45,7 +38,6 @@ const nextConfig: NextConfig = {
         ],
       },
       {
-        // The service worker must never be cached, so app updates reach installed users.
         source: "/sw.js",
         headers: [
           { key: "Content-Type", value: "application/javascript; charset=utf-8" },

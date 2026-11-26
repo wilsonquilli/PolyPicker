@@ -71,6 +71,8 @@ def headlines(conn: Connection, game_ids: list[int]) -> dict[int, dict]:
         h["favorite_label"] = "toss-up" if edge < 0.05 else "slight favorite" if edge < 0.15 else "favorite"
         h.setdefault("projected_home_points", None)
         h.setdefault("projected_away_points", None)
+    from polypicker.api.freshness import stamp
+    stamp(out, "nba", conn)
     return out
 
 
@@ -99,6 +101,8 @@ def game_summaries(conn: Connection, rows: list[dict]) -> list[dict]:
     teams = teams_by_id(conn)
     heads = headlines(conn, [r["game_id"] for r in rows])
     recs = records_before(conn, rows)
+    from polypicker.api import reasons
+    why = reasons.nba(conn, rows, heads)
     out = []
     for r in rows:
         def side(tid, score):
@@ -110,7 +114,7 @@ def game_summaries(conn: Connection, rows: list[dict]) -> list[dict]:
             "sub_label": r["game_sub_label"], "tipoff_utc": r["tipoff_utc"], "game_date": r["game_date_et"],
             "status": r["status"], "home": side(r["home_team_id"], r["home_score"]),
             "away": side(r["away_team_id"], r["away_score"]), "winner_team_id": r["winner_team_id"],
-            "prediction": heads.get(r["game_id"]),
+            "prediction": heads.get(r["game_id"]), "reasons": why.get(r["game_id"]),
         })
     return out
 

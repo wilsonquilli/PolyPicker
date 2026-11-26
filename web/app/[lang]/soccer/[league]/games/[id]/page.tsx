@@ -10,6 +10,7 @@ import { dateTimeET, longDate, pct } from "@/lib/format";
 import { decidedText, soccerLeague, stageText, type SoccerGameDetail, type SoccerPredictions, type SoccerTeamStats } from "@/lib/soccer";
 import { keyed } from "@/lib/i18n";
 import { rich } from "@/lib/i18n/rich";
+import { ReasonList } from "@/components/Reasons";
 import { getLang, getT } from "@/lib/i18n/server";
 
 type Params = Promise<{ league: string; id: string }>;
@@ -199,6 +200,10 @@ async function Match({ params }: { params: Params }) {
         </div>
 
         <aside className="flex flex-col gap-4 lg:sticky lg:top-32 lg:self-start">
+          {g.status === "scheduled" && g.prediction && (
+            <ReasonList reasons={g.reasons} pick={g.prediction.pick} teams={{ home: (g.home.short_name ?? g.home.name), away: (g.away.short_name ?? g.away.name) }}
+              pickLabel={g.prediction.pick === "draw" ? t("a draw") : g.prediction.pick === "home" ? (g.home.short_name ?? g.home.name) : (g.away.short_name ?? g.away.name)} t={t} lang={lang} />
+          )}
           {hasForecast && final && (
             <Card className="p-4">
               <h2 className="mb-3 text-sm font-semibold">{t("How the forecast did")}</h2>

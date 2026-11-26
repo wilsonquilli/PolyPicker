@@ -1,5 +1,3 @@
-import Link from "next/link";
-
 import { Card } from "@/components/ui";
 import { rich } from "@/lib/i18n/rich";
 import { getT } from "@/lib/i18n/server";
@@ -40,23 +38,6 @@ export default async function Methodology() {
           <li>{t("When an NBA game has a betting line, the forecast also uses the market: the sportsbook spread and total (via ESPN) and Polymarket’s price. Tested on past seasons, the market carries most of the predictive information; PolyPicker adds injury and lineup data on top and falls back to its own model when no line is posted yet.")}</li>
           <li>{t("NBA game forecasts rate every player from past games (box-score production and plus-minus, recent games weighted more) and add up the players expected to play tonight, so a missing star lowers his team’s chances.")}</li>
         </ul>
-      </Card>
-
-      <Card className="p-6">
-        <h2 className="mb-2 text-lg font-semibold">{t("Honesty rules")}</h2>
-        <ul className="list-disc space-y-2 pl-5 text-sm text-muted">
-          <li>{t("Published forecasts are never edited. Updates create a new revision, and old ones stay in the archive.")}</li>
-          <li>{t("Every forecast shows when it was published, its data cutoff and model version.")}</li>
-          <li>{rich(t("Accuracy is reported openly, including against simple baselines, on the <link>Accuracy</link> page."), { link: (c) => <Link href="/nba/accuracy" className="text-accent underline">{c}</Link> })}</li>
-          <li>{t("Backtests (forecasts regenerated after the fact) are always labeled and never presented as live picks.")}</li>
-        </ul>
-      </Card>
-
-      <Card className="border-warn/40 bg-warn-soft p-6">
-        <h2 className="mb-2 text-lg font-semibold">{t("Disclaimer")}</h2>
-        <p className="text-sm">
-          {t("PolyPicker is an independent informational service. Forecasts are estimates, not guaranteed outcomes or financial advice. PolyPicker does not accept or place wagers, hold funds or facilitate gambling. Data is derived from NBA.com via a public research dataset; PolyPicker isn’t affiliated with the NBA or its teams.")}
-        </p>
       </Card>
     </article>
   );

@@ -23,7 +23,9 @@ FROM nfl_predictions p
 JOIN nfl_games g ON g.game_id = p.game_id
 LEFT JOIN nfl_prediction_outcomes o ON o.prediction_id = p.id
 LEFT JOIN nfl_player_game_stats s ON p.subject_type = 'player' AND s.game_id = p.game_id AND s.player_id = p.subject_id
-WHERE o.prediction_id IS NULL OR o.graded_state = 'pending' OR o.graded_state = 'unavailable'
+WHERE o.prediction_id IS NULL
+   -- an existing pending grade can only change once the game is over (re-grading the rest is a no-op)
+   OR ((o.graded_state = 'pending' OR o.graded_state = 'unavailable') AND g.status IN ('final', 'canceled'))
 """
 
 

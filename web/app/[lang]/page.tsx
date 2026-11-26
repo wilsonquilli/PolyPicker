@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { connection } from "next/server";
 import { Suspense } from "react";
-import { AutoRefresh, Carousel } from "@/components/client";
+import { AutoRefresh, Carousel, UpdatedAt } from "@/components/client";
 import { ComboGrader, PickButton } from "@/components/ComboGrader";
 import { Combos } from "@/components/Combos";
 import { Futures } from "@/components/Futures";
@@ -11,7 +11,8 @@ import { addDays } from "@/lib/format";
 import { fromNba, fromNfl, fromSoccer, isSoccer, LEAGUES, legKey, nowMs, todayET, whenLabel, type LeagueKey, type Market, type MarketSide } from "@/lib/home";
 import type { NflGame } from "@/lib/nfl";
 import { LEAGUE_SLUGS, SOCCER_LEAGUES, type SoccerGame } from "@/lib/soccer";
-import type { T } from "@/lib/i18n";
+import type { Lang, T } from "@/lib/i18n";
+import { ReasonLine } from "@/components/Reasons";
 import { getLang, getT } from "@/lib/i18n/server";
 import type { GameSummary } from "@/lib/types";
 
@@ -185,7 +186,7 @@ async function Feed({ searchParams }: { searchParams: SP }) {
           </div>
         ) : (
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-            {sorted.map((m) => <MarketCard key={m.key} m={m} when={when(m)} t={t} />)}
+            {sorted.map((m) => <MarketCard key={m.key} m={m} when={when(m)} t={t} lang={lang} />)}
           </div>
         )}
         {unavailable.length > 0 && <p className="mt-4 text-xs text-warn">{t("{leagues} data is unavailable right now.", { leagues: unavailable.join(", ") })}</p>}
@@ -235,7 +236,7 @@ function outcomes(m: Market, t: T): { key: "home" | "away" | "draw"; label: stri
 
 const title = (m: Market) => isSoccer(m) ? `${m.home.short} vs ${m.away.short}` : `${m.away.short} @ ${m.home.short}`;
 
-function MarketCard({ m, when, t }: { m: Market; when: string; t: T }) {
+function MarketCard({ m, when, t, lang }: { m: Market; when: string; t: T; lang: Lang }) {
   // The whole card opens the game (stretched link); outcome rows sit above it and add that leg to the combo grader.
   return (
     <article className="group relative flex flex-col gap-3 rounded-2xl border border-line bg-surface p-4 shadow-card transition hover:-translate-y-0.5 hover:border-accent/40 hover:shadow-md">
@@ -255,10 +256,14 @@ function MarketCard({ m, when, t }: { m: Market; when: string; t: T }) {
           </li>
         ))}
       </ul>
+      <ReasonLine reasons={m.reasons} pick={m.pick} teams={{ home: m.home.short, away: m.away.short }} t={t} lang={lang} />
       {m.polymarket && <PolymarketLine m={m} t={t} />}
-      <div className="mt-auto flex items-center justify-between gap-2 text-[11px] text-muted">
-        <LeagueTag m={m} />
-        <span className="tabular shrink-0 font-medium">{when}</span>
+      <div className="mt-auto flex flex-col gap-0.5 text-[11px] text-muted">
+        <div className="flex items-center justify-between gap-2">
+          <LeagueTag m={m} />
+          <span className="tabular shrink-0 font-medium">{when}</span>
+        </div>
+        {m.fresh && <UpdatedAt iso={m.fresh.at} checked={m.fresh.checked} odds={m.fresh.odds} className="relative z-10 self-start text-[10px] text-faint" />}
       </div>
     </article>
   );

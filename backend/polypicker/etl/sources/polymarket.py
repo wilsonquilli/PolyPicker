@@ -83,10 +83,11 @@ def _f(v) -> float | None:
         return None
 
 
-def list_markets(get: Getter, *, closed: bool, since: datetime | None = None, max_pages: int = 200) -> list[dict]:
+def list_markets(get: Getter, *, closed: bool, since: datetime | None = None, max_pages: int = 200,
+                 tag: int = NBA_TAG) -> list[dict]:
     out, cursor = [], None
     for _ in range(max_pages):
-        p = {"tag_id": NBA_TAG, "closed": "true" if closed else "false", "limit": 500,
+        p = {"tag_id": tag, "closed": "true" if closed else "false", "limit": 500,
              "sports_market_types": "moneyline"}
         if since:
             p["end_date_min"] = since.strftime("%Y-%m-%dT%H:%M:%SZ")  # server-side narrowing (also filtered below)

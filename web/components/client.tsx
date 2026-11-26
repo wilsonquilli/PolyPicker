@@ -25,6 +25,31 @@ export function RelativeTime({ iso, prefix = "" }: { iso: string; prefix?: strin
   );
 }
 
+/**
+ * "Updated 4m ago" for a forecast: the newest of its last re-check and its last odds fetch. Turns amber after
+ * STALE_HOURS so an out-of-date price is obvious; the tooltip lists both times.
+ */
+const STALE_HOURS = 6;
+export function UpdatedAt({ iso, checked, odds, className = "" }: { iso: string; checked?: string | null; odds?: string | null; className?: string }) {
+  const lang = useLang();
+  const t = useT();
+  const [stale, setStale] = useState(false);
+  useEffect(() => {
+    const check = () => setStale(Date.now() - Date.parse(iso) > STALE_HOURS * 3_600_000);
+    check();
+    const id = setInterval(check, 60_000);
+    return () => clearInterval(id);
+  }, [iso]);
+  const fmt = (x: string) => new Intl.DateTimeFormat(intlLocale(lang), { month: "short", day: "numeric", hour: "numeric", minute: "2-digit",
+    timeZone: "America/New_York" }).format(new Date(x)) + " ET";
+  const tip = [checked && `${t("Forecast checked")} ${fmt(checked)}`, odds && `${t("Odds as of")} ${fmt(odds)}`].filter(Boolean).join(" · ");
+  return (
+    <span className={`${className} ${stale ? "text-warn!" : ""}`} title={tip || undefined}>
+      <RelativeTime iso={iso} prefix={`${t("Updated")} `} />
+    </span>
+  );
+}
+
 function relative(iso: string, lang: Lang): string {
   const s = (Date.now() - new Date(iso).getTime()) / 1000;
   const es = lang === "es";
